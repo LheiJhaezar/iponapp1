@@ -1,450 +1,308 @@
-"use client";
+'use client';
 
-import { useEffect, useState, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
-import NavTabs from "@/components/NavTabs";
-import Drawer from "@/components/Drawer";
-
-type Cutoff = { id: string; start_date: string; end_date: string; target_amount: number };
-type Entry = { id: string; type: "income" | "allocation" | "food" | "mood"; label: string; sub: string; amount?: number; icon: string; created_at: string };
-
-const MOODS = ["😔", "😐", "🙂", "😄", "🤩"];
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { createClient } from '@/lib/supabase/client';
+import { formatMoney, computeRunningBalances } from '@/lib/money';
+import BottomSheet from '@/components/BottomSheet';
 
 export default function DashboardPage() {
   const supabase = createClient();
-  const [userId, setUserId] = useState<string | null>(null);
-  const [userName, setUserName] = useState("");
-  const [cutoff, setCutoff] = useState<Cutoff | null>(null);
-  const [saved, setSaved] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [available, setAvailable] = useState(0);
-  const [billsDue, setBillsDue] = useState(0);
-  const [todayMoods, setTodayMoods] = useState<string[]>([]);
-  const [weekMoods, setWeekMoods] = useState<string[]>([]);
-  const [todayFood, setTodayFood] = useState<string[]>([]);
-  const [recentEntries, setRecentEntries] = useState<Entry[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  // Drawer state
-  const [incomeOpen, setIncomeOpen] = useState(false);
-  const [allocOpen, setAllocOpen] = useState(false);
-  const [foodOpen, setFoodOpen] = useState(false);
-  const [moodOpen, setMoodOpen] = useState(false);
-  const [newCutoffOpen, setNewCutoffOpen] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [activeCutoff, setActiveCutoff] = useState<any>(null);
 
-  // Income form
-  const [incomeSource, setIncomeSource] = useState("");
-  const [incomeAmount, setIncomeAmount] = useState("");
+  // Continuous Ledger Metrics
+  const [totalSavings, setTotalSavings] = useState(0);
+  const [carriedOverSavings, setCarriedOverSavings] = useState(0);
+  const [thisCutoffSavings, setThisCutoffSavings] = useState(0);
+  const [availableCash, setAvailableCash] = useState(0);
 
-  // Alloc form
-  const [allocTitle, setAllocTitle] = useState("");
-  const [allocCategory, setAllocCategory] = useState("savings");
-  const [allocAmount, setAllocAmount] = useState("");
-  const [allocOther, setAllocOther] = useState("");
+  const [billsDueCount, setBillsDueCount] = useState(0);
+  const [upcomingBills, setUpcomingBills] = useState<any[]>([]);
+  const [recentLedger, setRecentLedger] = useState<any[]>([]);
 
-  // Food form
-  const [foodWhat, setFoodWhat] = useState("");
-  const [foodMeal, setFoodMeal] = useState("Lunch");
+  // New Cutoff Modal Sheet
+  const [isNewCutoffOpen, setIsNewCutoffOpen] = useState(false);
+  const [newStartDate, setNewStartDate] = useState('');
+  const [newEndDate, setNewEndDate] = useState('');
+  const [newTargetAmount, setNewTargetAmount] = useState('5000');
 
-  // Mood form
-  const [selectedMood, setSelectedMood] = useState("🙂");
-  const [moodNote, setMoodNote] = useState("");
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
 
-  // New cutoff form
-  const [newStart, setNewStart] = useState("");
-  const [newEnd, setNewEnd] = useState("");
-  const [newTarget, setNewTarget] = useState("");
+  const loadDashboardData = async () => {
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (!currentUser) return;
+    setUser(currentUser);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data: userData } = await supabase.auth.getUser();
-    const uid = userData.user?.id ?? null;
-    setUserId(uid);
-    if (!uid) { setLoading(false); return; }
+    // Idempotent auto-deduct function
+    await supabase.rpc('process_my_due_bills');
 
-    const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", uid).single();
-    setUserName(profile?.full_name?.split(" ")[0] ?? "");
+    // Fetch Cutoffs
+    const { data: cutoffs } = await supabase
+      .from('cutoffs')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .order('start_date', { ascending: false });
 
-    const { data: cutoffs } = await supabase.from("cutoffs").select("*").eq("user_id", uid).order("start_date", { ascending: false });
-    const current = cutoffs?.[0] ?? null;
-    setCutoff(current);
+    const currentCut = cutoffs?.[0];
+    setActiveCutoff(currentCut);
 
-    // available cash
-    const { data: allIncome } = await supabase.from("income_entries").select("amount").eq("user_id", uid);
-    const { data: allAllocs } = await supabase.from("allocations").select("amount").eq("user_id", uid);
-    const totalIn = (allIncome ?? []).reduce((s, r) => s + Number(r.amount), 0);
-    const totalOut = (allAllocs ?? []).reduce((s, r) => s + Number(r.amount), 0);
-    setAvailable(totalIn - totalOut);
-
-    if (current) {
-      const { data: allocRows } = await supabase.from("allocations").select("amount").eq("user_id", uid).eq("cutoff_id", current.id).eq("category", "savings");
-      setSaved((allocRows ?? []).reduce((s, r) => s + Number(r.amount), 0));
+    if (currentCut) {
+      // Set next cutoff start date default
+      const endDate = new Date(currentCut.end_date);
+      endDate.setDate(endDate.getDate() + 1);
+      setNewStartDate(endDate.toISOString().split('T')[0]);
+    } else {
+      setNewStartDate(new Date().toISOString().split('T')[0]);
     }
 
-    // streak
-    if (cutoffs && cutoffs.length > 1) {
-      let s = 0;
-      for (const c of cutoffs.slice(1)) {
-        const { data: sr } = await supabase.from("allocations").select("amount").eq("user_id", uid).eq("cutoff_id", c.id).eq("category", "savings");
-        const total = (sr ?? []).reduce((x, r) => x + Number(r.amount), 0);
-        if (total >= Number(c.target_amount)) s++; else break;
-      }
-      setStreak(s);
-    }
+    // Fetch Income, Allocations, and Recurring Bills
+    const [{ data: incData }, { data: allocData }, { data: billsData }] = await Promise.all([
+      supabase.from('income_entries').select('*').eq('user_id', currentUser.id),
+      supabase.from('allocations').select('*').eq('user_id', currentUser.id),
+      supabase.from('recurring_bills').select('*').eq('user_id', currentUser.id).eq('active', true),
+    ]);
 
-    // bills due soon
-    const { data: bills } = await supabase.from("recurring_bills").select("*").eq("user_id", uid).eq("active", true);
-    const today = new Date().getDate();
-    const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-    let dueCount = 0;
-    (bills ?? []).forEach((b) => {
-      let daysAway = 999;
-      if (b.due_schedule === "end_of_month") daysAway = daysInMonth - today;
-      else if (b.due_schedule === "per_cutoff") { const next = today <= 15 ? 15 : 30; daysAway = next - today; }
-      else if (b.due_schedule === "specific_days" && b.due_days?.length) {
-        const upcomming = b.due_days.map((d: number) => d >= today ? d - today : daysInMonth - today + d).sort((a: number, z: number) => a - z);
-        daysAway = upcomming[0] ?? 999;
-      }
-      if (daysAway <= 7) dueCount++;
+    // 1. Calculate Continuous Savings
+    const allSavings = (allocData || []).filter((a) => a.category === 'savings');
+    const computedTotalSavings = allSavings.reduce((acc, curr) => acc + Number(curr.amount), 0);
+    setTotalSavings(computedTotalSavings);
+
+    const thisCutSavings = allSavings
+      .filter((a) => a.cutoff_id === currentCut?.id)
+      .reduce((acc, curr) => acc + Number(curr.amount), 0);
+    setThisCutoffSavings(thisCutSavings);
+    setCarriedOverSavings(computedTotalSavings - thisCutSavings);
+
+    // 2. Compute Available Cash
+    const totalIncome = (incData || []).reduce((acc, curr) => acc + Number(curr.amount), 0);
+    const totalAllocations = (allocData || []).reduce((acc, curr) => acc + Number(curr.amount), 0);
+    setAvailableCash(totalIncome - totalAllocations);
+
+    // 3. Process Bills Due within 7 Days
+    const today = new Date();
+    const next7Days = new Date();
+    next7Days.setDate(today.getDate() + 7);
+
+    const dueSoon = (billsData || []).filter((b) => {
+      if (!b.next_due_date) return false;
+      const d = new Date(b.next_due_date);
+      return d <= next7Days;
     });
-    setBillsDue(dueCount);
 
-    // mood
-    const todayStr = new Date().toISOString().split("T")[0];
-    const { data: moods } = await supabase.from("mood_entries").select("mood, log_date").eq("user_id", uid).gte("log_date", new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0]).order("log_date", { ascending: true });
-    setWeekMoods((moods ?? []).map((m) => m.mood));
-    setTodayMoods((moods ?? []).filter((m) => m.log_date === todayStr).map((m) => m.mood));
+    setBillsDueCount(dueSoon.length);
+    setUpcomingBills(
+      (billsData || [])
+        .sort((a, b) => new Date(a.next_due_date).getTime() - new Date(b.next_due_date).getTime())
+        .slice(0, 3)
+    );
 
-    // food today
-    const { data: foodRow } = await supabase.from("food_entries").select("*").eq("user_id", uid).eq("log_date", todayStr).maybeSingle();
-    if (foodRow) {
-      const slots = ["breakfast", "brunch", "lunch", "merienda", "dinner"].filter((k) => foodRow[k]);
-      setTodayFood(slots);
-    } else {
-      setTodayFood([]);
-    }
+    // 4. Recent Ledger Entries
+    const rawIncomes = (incData || []).map((i) => ({
+      id: i.id,
+      created_at: i.created_at,
+      type: 'income' as const,
+      amount: Number(i.amount),
+      category: 'income',
+      note: i.source || i.note || 'Income',
+    }));
 
-    // recent entries feed
-    const feed: Entry[] = [];
-    if (current) {
-      const { data: incomeRows } = await supabase.from("income_entries").select("*").eq("user_id", uid).eq("cutoff_id", current.id).order("created_at", { ascending: false }).limit(5);
-      (incomeRows ?? []).forEach((r) => feed.push({ id: r.id, type: "income", icon: "💰", label: r.source ?? "Income", sub: "Income", amount: r.amount, created_at: r.created_at }));
-      const { data: allocRowsFeed } = await supabase.from("allocations").select("*").eq("user_id", uid).eq("cutoff_id", current.id).order("created_at", { ascending: false }).limit(8);
-      (allocRowsFeed ?? []).forEach((r) => feed.push({ id: r.id, type: "allocation", icon: r.category === "savings" ? "🌱" : r.category === "groceries" ? "🛒" : "📋", label: r.note ?? r.category, sub: r.category.charAt(0).toUpperCase() + r.category.slice(1), amount: r.amount, created_at: r.created_at }));
-    }
-    const { data: foodFeed } = await supabase.from("food_entries").select("*").eq("user_id", uid).order("log_date", { ascending: false }).limit(3);
-    (foodFeed ?? []).forEach((r) => { const meals = ["breakfast","brunch","lunch","merienda","dinner"].filter((k) => r[k]); if (meals.length) feed.push({ id: r.id, type: "food", icon: "🍚", label: meals.map((m) => r[m]).join(", "), sub: `Food · ${r.log_date}`, created_at: r.created_at }); });
-    const { data: moodFeed } = await supabase.from("mood_entries").select("*").eq("user_id", uid).order("created_at", { ascending: false }).limit(3);
-    (moodFeed ?? []).forEach((r) => feed.push({ id: r.id, type: "mood", icon: r.mood, label: r.note ?? "Mood check-in", sub: `Mood · ${r.log_date}`, created_at: r.created_at }));
-    feed.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setRecentEntries(feed.slice(0, 10));
+    const rawAllocations = (allocData || []).map((a) => ({
+      id: a.id,
+      created_at: a.created_at,
+      type: 'allocation' as const,
+      amount: Number(a.amount),
+      category: a.category,
+      note: a.note || a.category,
+    }));
 
-    setLoading(false);
-  }, [supabase]);
+    const processed = computeRunningBalances([...rawIncomes, ...rawAllocations]);
+    setRecentLedger(processed.slice(0, 3));
+  };
 
-  useEffect(() => { load(); }, [load]);
-
-  async function submitIncome(e: React.FormEvent) {
+  const handleCreateCutoff = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId || !cutoff) return;
-    await supabase.from("income_entries").insert({ user_id: userId, cutoff_id: cutoff.id, amount: Number(incomeAmount), source: incomeSource || null });
-    setIncomeSource(""); setIncomeAmount(""); setIncomeOpen(false); load();
-  }
+    if (!user) return;
 
-  async function submitAlloc(e: React.FormEvent) {
-    e.preventDefault();
-    if (!userId || !cutoff) return;
-    let note = allocTitle.trim();
-    if (allocCategory === "other" && allocOther.trim()) note = note ? `${note} — ${allocOther.trim()}` : allocOther.trim();
-    await supabase.from("allocations").insert({ user_id: userId, cutoff_id: cutoff.id, category: allocCategory, amount: Number(allocAmount), note: note || null });
-    setAllocTitle(""); setAllocAmount(""); setAllocOther(""); setAllocOpen(false); load();
-  }
+    await supabase.from('cutoffs').insert([
+      {
+        user_id: user.id,
+        start_date: newStartDate,
+        end_date: newEndDate,
+        target_amount: parseFloat(newTargetAmount),
+        carried_in_savings: totalSavings,
+      },
+    ]);
 
-  async function submitFood(e: React.FormEvent) {
-    e.preventDefault();
-    if (!userId || !foodWhat) return;
-    const today = new Date().toISOString().split("T")[0];
-    const mealKey = foodMeal.toLowerCase();
-    const { data: existing } = await supabase.from("food_entries").select("id").eq("user_id", userId).eq("log_date", today).maybeSingle();
-    if (existing) {
-      await supabase.from("food_entries").update({ [mealKey]: foodWhat }).eq("id", existing.id);
-    } else {
-      await supabase.from("food_entries").insert({ user_id: userId, log_date: today, [mealKey]: foodWhat });
-    }
-    setFoodWhat(""); setFoodOpen(false); load();
-  }
+    setIsNewCutoffOpen(false);
+    loadDashboardData();
+  };
 
-  async function submitMood(e: React.FormEvent) {
-    e.preventDefault();
-    if (!userId) return;
-    const today = new Date().toISOString().split("T")[0];
-    const { data: existing } = await supabase.from("mood_entries").select("id").eq("user_id", userId).eq("log_date", today).maybeSingle();
-    if (existing) {
-      await supabase.from("mood_entries").update({ mood: selectedMood, note: moodNote || null }).eq("id", existing.id);
-    } else {
-      await supabase.from("mood_entries").insert({ user_id: userId, log_date: today, mood: selectedMood, note: moodNote || null });
-    }
-    setMoodNote(""); setMoodOpen(false); load();
-  }
-
-  async function submitNewCutoff(e: React.FormEvent) {
-    e.preventDefault();
-    if (!userId) return;
-    await supabase.from("cutoffs").insert({ user_id: userId, start_date: newStart, end_date: newEnd, target_amount: Number(newTarget) });
-    setNewStart(""); setNewEnd(""); setNewTarget(""); setNewCutoffOpen(false); load();
-  }
-
-  const target = cutoff ? Number(cutoff.target_amount) : 0;
-  const pct = target > 0 ? Math.min(100, Math.round((saved / target) * 100)) : 0;
-
-  if (loading) return <div className="max-w-3xl mx-auto px-5 py-10 text-sm" style={{ color: "var(--ink-soft)" }}>Loading...</div>;
+  const cutoffTarget = Number(activeCutoff?.target_amount || 5000);
+  const cutoffProgressPercent = Math.min(100, Math.round((thisCutoffSavings / (cutoffTarget || 1)) * 100));
 
   return (
-    <div className="max-w-3xl mx-auto px-5 py-8">
-      {/* Brand */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-baseline gap-2">
-          <span className="font-display font-semibold text-xl">Ipon</span>
-          <span className="text-xs" style={{ color: "var(--ink-soft)" }}>your cutoff, tracked</span>
+    <div className="p-4 space-y-5">
+      {/* Header & Avatar */}
+      <div className="flex items-center justify-between pt-2">
+        <div>
+          <h1 className="font-serif text-2xl font-bold text-[#143f34]">Ipon App</h1>
+          <p className="text-xs text-[#143f34]/60 font-medium">Continuous Savings Ledger</p>
         </div>
-        <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm text-white" style={{ background: "var(--jade)" }}>
-          {userName?.[0]?.toUpperCase() ?? "M"}
+        <button
+          onClick={() => setIsNewCutoffOpen(true)}
+          className="p-2 bg-[#1f5d4c]/10 rounded-full border border-[#1f5d4c]/20 text-sm font-bold min-w-[44px] min-h-[44px] flex items-center justify-center"
+        >
+          👤
+        </button>
+      </div>
+
+      {/* Hero Card: Total Continuous Savings */}
+      <div className="bg-[#1f5d4c] text-[#f6f3ea] p-6 rounded-3xl shadow-xl space-y-4 relative overflow-hidden">
+        <div className="space-y-1">
+          <span className="text-[11px] uppercase tracking-wider text-[#e2a63f] font-bold">Total Savings</span>
+          <h2 className="font-serif text-4xl font-extrabold">{formatMoney(totalSavings)}</h2>
+          <p className="text-xs text-[#f6f3ea]/80">
+            {formatMoney(carriedOverSavings)} carried over + {formatMoney(thisCutoffSavings)} this cutoff
+          </p>
+        </div>
+
+        {/* Cutoff Target Progress */}
+        <div className="pt-2 space-y-1.5 border-t border-[#f6f3ea]/15">
+          <div className="flex justify-between items-center text-xs">
+            <span>Cutoff Progress ({cutoffProgressPercent}%)</span>
+            <span>Target: {formatMoney(cutoffTarget)}</span>
+          </div>
+          <div className="w-full bg-[#143f34] rounded-full h-2.5 overflow-hidden">
+            <div
+              className="bg-[#e2a63f] h-full rounded-full transition-all duration-500"
+              style={{ width: `${cutoffProgressPercent}%` }}
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={() => setIsNewCutoffOpen(true)}
+          className="w-full py-3 bg-[#e2a63f] text-[#143f34] font-bold rounded-2xl text-xs uppercase tracking-wider transition active:scale-98 min-h-[44px]"
+        >
+          Start Next Cutoff
+        </button>
+      </div>
+
+      {/* Three Stat Chips */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl text-center space-y-1">
+          <span className="text-[10px] uppercase font-bold text-[#143f34]/60">Available</span>
+          <p className={`text-sm font-extrabold ${availableCash < 0 ? 'text-[#c85c46]' : 'text-[#1f5d4c]'}`}>
+            {formatMoney(availableCash)}
+          </p>
+        </div>
+
+        <div className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl text-center space-y-1">
+          <span className="text-[10px] uppercase font-bold text-[#143f34]/60">Bills Due</span>
+          <p className="text-sm font-extrabold text-[#c85c46]">{billsDueCount} Soon</p>
+        </div>
+
+        <div className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl text-center space-y-1">
+          <span className="text-[10px] uppercase font-bold text-[#143f34]/60">Streak</span>
+          <p className="text-sm font-extrabold text-[#e2a63f]">
+            {thisCutoffSavings >= cutoffTarget ? '🔥 Active' : '⏳ Pending'}
+          </p>
         </div>
       </div>
 
-      <NavTabs />
-
-      {/* No cutoff state */}
-      {!cutoff && (
-        <div className="border border-dashed rounded-card p-10 text-center mb-6" style={{ borderColor: "var(--line)" }}>
-          <p className="text-sm mb-4" style={{ color: "var(--ink-soft)" }}>No active cutoff yet. Create one to start tracking.</p>
-          <button onClick={() => setNewCutoffOpen(true)} className="font-semibold rounded-xl px-5 py-2.5 text-sm text-white" style={{ background: "var(--jade)" }}>
-            Create your first cutoff
-          </button>
+      {/* Coming Up Strip */}
+      <div className="space-y-2">
+        <h3 className="font-serif text-sm font-bold text-[#143f34]">Coming Up Bills</h3>
+        <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+          {upcomingBills.map((b) => (
+            <div key={b.id} className="min-w-[160px] bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl space-y-1">
+              <p className="text-xs font-bold text-[#143f34] truncate">{b.name}</p>
+              <p className="text-xs font-extrabold text-[#c85c46]">{formatMoney(Number(b.expected_amount))}</p>
+              <span className="text-[10px] text-[#143f34]/60 block">{b.next_due_date}</span>
+            </div>
+          ))}
         </div>
-      )}
+      </div>
 
-      {cutoff && (
-        <>
-          {/* Hero */}
-          <div className="rounded-3xl p-6 mb-4 text-white" style={{ background: "linear-gradient(135deg, var(--jade-deep), var(--jade) 80%)" }}>
-            <p className="text-xs opacity-80 mb-1">{cutoff.start_date} – {cutoff.end_date}</p>
-            <h1 className="font-display font-semibold mb-1" style={{ fontSize: "clamp(20px,4vw,28px)" }}>
-              ₱{saved.toLocaleString()} saved of ₱{target.toLocaleString()}
-            </h1>
-            {/* progress bar */}
-            <div className="rounded-full mt-3 overflow-hidden" style={{ height: 6, background: "rgba(255,255,255,0.2)" }}>
-              <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: "var(--gold)" }} />
-            </div>
-          </div>
+      {/* Ledger Preview */}
+      <div className="space-y-3 pt-2">
+        <div className="flex justify-between items-center">
+          <h3 className="font-serif text-base font-bold text-[#143f34]">Ledger</h3>
+          <Link href="/ledger" className="text-xs font-bold text-[#1f5d4c] hover:underline min-h-[44px] flex items-center">
+            See all →
+          </Link>
+        </div>
 
-          {/* Stat tiles */}
-          <div className="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-4">
-            {[
-              { val: `${pct}%`, label: "Progress" },
-              { val: `${streak}`, label: "Streak" },
-              { val: `₱${available.toLocaleString()}`, label: "Available" },
-              { val: `${billsDue}`, label: "Bills due" },
-            ].map((s) => (
-              <div key={s.label} className="rounded-2xl p-4 text-center border" style={{ background: "var(--paper-raised)", borderColor: "var(--line)" }}>
-                <div className="font-display font-semibold text-xl">{s.val}</div>
-                <div className="text-xs mt-1" style={{ color: "var(--ink-soft)" }}>{s.label}</div>
+        <div className="space-y-2">
+          {recentLedger.map((row) => (
+            <div key={row.id} className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl flex justify-between items-center">
+              <div>
+                <p className="text-xs font-bold text-[#143f34]">{row.note}</p>
+                <span className="text-[10px] text-[#143f34]/60">{new Date(row.created_at).toLocaleDateString()}</span>
               </div>
-            ))}
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex flex-wrap gap-2 mb-5">
-            {[
-              { icon: "💰", label: "Log income", action: () => setIncomeOpen(true) },
-              { icon: "📊", label: "Allocate", action: () => setAllocOpen(true) },
-              { icon: "🍚", label: "Log food", action: () => setFoodOpen(true) },
-              { icon: "🙂", label: "Log mood", action: () => setMoodOpen(true) },
-            ].map((a) => (
-              <button key={a.label} onClick={a.action}
-                className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold border transition hover:border-jade hover:text-jade"
-                style={{ background: "var(--paper-raised)", borderColor: "var(--line)", color: "var(--ink)" }}>
-                <span>{a.icon}</span>{a.label}
-              </button>
-            ))}
-            <button onClick={() => setNewCutoffOpen(true)}
-              className="flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold border transition hover:border-jade hover:text-jade"
-              style={{ background: "var(--paper-raised)", borderColor: "var(--line)", color: "var(--ink)" }}>
-              ✂️ New cutoff
-            </button>
-          </div>
-
-          {/* Summary mini-cards */}
-          <div className="grid grid-cols-1 gap-3 mb-5 sm:grid-cols-2">
-            {/* Food */}
-            <div className="rounded-2xl p-4 border" style={{ background: "var(--paper-raised)", borderColor: "var(--line)" }}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-display font-semibold text-sm">Today's food</span>
-                {todayFood.length > 0 && <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: "var(--sage)", color: "var(--jade-deep)" }}>{todayFood.length} logged</span>}
-              </div>
-              {todayFood.length === 0
-                ? <p className="text-xs" style={{ color: "var(--ink-soft)" }}>Nothing logged yet today</p>
-                : <div className="flex flex-wrap gap-1.5">{todayFood.map((m) => (
-                  <span key={m} className="text-xs font-semibold px-2.5 py-1 rounded-lg capitalize" style={{ background: "var(--sage)", color: "var(--jade-deep)" }}>{m}</span>
-                ))}</div>
-              }
+              <span className={`text-xs font-extrabold ${row.type === 'income' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>
+                {row.type === 'income' ? '+' : '-'} {formatMoney(row.amount)}
+              </span>
             </div>
-            {/* Mood */}
-            <div className="rounded-2xl p-4 border" style={{ background: "var(--paper-raised)", borderColor: "var(--line)" }}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-display font-semibold text-sm">Mood, 7 days</span>
-              </div>
-              <div className="flex gap-1.5">
-                {Array.from({ length: 7 }).map((_, i) => {
-                  const mood = weekMoods[i];
-                  const isToday = i === weekMoods.length - 1;
-                  return (
-                    <div key={i} className="w-8 h-8 rounded-full flex items-center justify-center text-sm border"
-                      style={{ background: isToday && mood ? "var(--gold)" : mood ? "var(--paper)" : "var(--sage)", borderColor: isToday && mood ? "var(--gold-deep)" : "var(--line)" }}>
-                      {mood ?? ""}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* New Cutoff Bottom Sheet */}
+      <BottomSheet isOpen={isNewCutoffOpen} onClose={() => setIsNewCutoffOpen(false)} title="Start Next Cutoff">
+        <form onSubmit={handleCreateCutoff} className="space-y-4">
+          <div className="p-3 bg-[#e2a63f]/15 border border-[#e2a63f]/30 rounded-2xl text-xs space-y-1">
+            <span className="font-bold text-[#143f34]">What carries over:</span>
+            <p className="text-[#143f34]/80">Carried in savings: {formatMoney(totalSavings)}</p>
+            <p className="text-[#143f34]/80">Available cash: {formatMoney(availableCash)}</p>
           </div>
 
-          {/* Recent activity feed */}
-          <div className="rounded-card border p-5" style={{ background: "var(--paper-raised)", borderColor: "var(--line)" }}>
-            <h3 className="font-display font-semibold text-base mb-3">Recent activity</h3>
-            {recentEntries.length === 0 && <p className="text-xs" style={{ color: "var(--ink-soft)" }}>No entries yet — log income or allocate to get started.</p>}
-            <div className="flex flex-col">
-              {recentEntries.map((e) => (
-                <div key={e.id + e.type} className="flex items-center gap-3 py-2.5 border-b last:border-b-0" style={{ borderColor: "var(--line)" }}>
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm flex-shrink-0" style={{ background: "var(--sage)" }}>{e.icon}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm truncate">{e.label}</div>
-                    <div className="text-xs" style={{ color: "var(--ink-soft)" }}>{e.sub}</div>
-                  </div>
-                  {e.amount !== undefined && (
-                    <div className="font-semibold text-sm flex-shrink-0">₱{Number(e.amount).toLocaleString()}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+          <div>
+            <label className="block text-xs font-bold text-[#143f34] mb-1">Start Date</label>
+            <input
+              type="date"
+              required
+              value={newStartDate}
+              onChange={(e) => setNewStartDate(e.target.value)}
+              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+            />
           </div>
-        </>
-      )}
 
-      {/* Log income drawer */}
-      <Drawer open={incomeOpen} onClose={() => setIncomeOpen(false)} title="Log income" subtitle="This adds to your available cash pool. Allocate it below.">
-        <form onSubmit={submitIncome} className="flex flex-col gap-3">
           <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Where's this from?</label>
-            <input value={incomeSource} onChange={(e) => setIncomeSource(e.target.value)} placeholder="e.g. Salary, Freelance, Gift"
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
+            <label className="block text-xs font-bold text-[#143f34] mb-1">End Date</label>
+            <input
+              type="date"
+              required
+              value={newEndDate}
+              onChange={(e) => setNewEndDate(e.target.value)}
+              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+            />
           </div>
+
           <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Amount (₱)</label>
-            <input type="number" required value={incomeAmount} onChange={(e) => setIncomeAmount(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
+            <label className="block text-xs font-bold text-[#143f34] mb-1">Target Amount (₱)</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              required
+              value={newTargetAmount}
+              onChange={(e) => setNewTargetAmount(e.target.value)}
+              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+            />
           </div>
-          <button type="submit" className="w-full font-bold rounded-xl py-3 text-sm text-white mt-2" style={{ background: "var(--jade)" }}>Add income</button>
+
+          <button
+            type="submit"
+            className="w-full py-3 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-sm min-h-[44px]"
+          >
+            Confirm & Extend Ledger
+          </button>
         </form>
-      </Drawer>
-
-      {/* Allocate drawer */}
-      <Drawer open={allocOpen} onClose={() => setAllocOpen(false)} title="Allocate this cutoff" subtitle="Assign money from your available cash to a category.">
-        <form onSubmit={submitAlloc} className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>What's this for?</label>
-            <input value={allocTitle} onChange={(e) => setAllocTitle(e.target.value)} placeholder="e.g. Weekly groceries, Emergency fund"
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Category</label>
-            <select value={allocCategory} onChange={(e) => setAllocCategory(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
-              <option value="savings">Savings</option>
-              <option value="bills">Bills</option>
-              <option value="groceries">Groceries</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          {allocCategory === "other" && (
-            <div>
-              <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Where did you spend this?</label>
-              <input value={allocOther} onChange={(e) => setAllocOther(e.target.value)} placeholder="e.g. Grab fare, Coffee, Medicine"
-                className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--sage)" }} />
-            </div>
-          )}
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Amount (₱)</label>
-            <input type="number" required value={allocAmount} onChange={(e) => setAllocAmount(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <button type="submit" className="w-full font-bold rounded-xl py-3 text-sm text-white mt-2" style={{ background: "var(--jade)" }}>Allocate</button>
-        </form>
-      </Drawer>
-
-      {/* Food drawer */}
-      <Drawer open={foodOpen} onClose={() => setFoodOpen(false)} title="Log food" subtitle="Quick-add a meal for today. For the full log, go to Food log tab.">
-        <form onSubmit={submitFood} className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>What did you eat?</label>
-            <input required value={foodWhat} onChange={(e) => setFoodWhat(e.target.value)} placeholder="e.g. Sinigang + rice"
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Meal slot</label>
-            <select value={foodMeal} onChange={(e) => setFoodMeal(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }}>
-              {["Breakfast","Brunch","Lunch","Merienda","Dinner","Extra"].map((m) => (
-                <option key={m}>{m}</option>
-              ))}
-            </select>
-          </div>
-          <button type="submit" className="w-full font-bold rounded-xl py-3 text-sm text-white mt-2" style={{ background: "var(--jade)" }}>Log meal</button>
-        </form>
-      </Drawer>
-
-      {/* Mood drawer */}
-      <Drawer open={moodOpen} onClose={() => setMoodOpen(false)} title="How are you feeling?" subtitle="One check-in per day — updates if you log again today.">
-        <form onSubmit={submitMood} className="flex flex-col gap-3">
-          <div className="flex gap-2 mb-2">
-            {MOODS.map((m) => (
-              <button type="button" key={m} onClick={() => setSelectedMood(m)}
-                className="w-11 h-11 rounded-full flex items-center justify-center text-xl border-2 transition"
-                style={{ borderColor: selectedMood === m ? "var(--gold-deep)" : "var(--line)", background: selectedMood === m ? "var(--gold)" : "var(--paper)" }}>
-                {m}
-              </button>
-            ))}
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Note (optional)</label>
-            <input value={moodNote} onChange={(e) => setMoodNote(e.target.value)} placeholder="what's on your mind?"
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <button type="submit" className="w-full font-bold rounded-xl py-3 text-sm text-white mt-2" style={{ background: "var(--jade)" }}>Save check-in</button>
-        </form>
-      </Drawer>
-
-      {/* New cutoff drawer */}
-      <Drawer open={newCutoffOpen} onClose={() => setNewCutoffOpen(false)} title="New cutoff" subtitle="Set the date range and your savings target for this period.">
-        <form onSubmit={submitNewCutoff} className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Start date</label>
-            <input type="date" required value={newStart} onChange={(e) => setNewStart(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>End date</label>
-            <input type="date" required value={newEnd} onChange={(e) => setNewEnd(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Savings target (₱)</label>
-            <input type="number" required value={newTarget} onChange={(e) => setNewTarget(e.target.value)}
-              className="w-full border rounded-xl px-3 py-2.5 text-sm" style={{ borderColor: "var(--line)", background: "var(--paper)" }} />
-          </div>
-          <button type="submit" className="w-full font-bold rounded-xl py-3 text-sm text-white mt-2" style={{ background: "var(--jade)" }}>Create cutoff</button>
-        </form>
-      </Drawer>
+      </BottomSheet>
     </div>
   );
 }
