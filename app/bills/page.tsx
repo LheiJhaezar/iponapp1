@@ -9,7 +9,6 @@ export default function BillsPage() {
   const [bills, setBills] = useState<any[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-  // Bill Form Inputs
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [nextDueDate, setNextDueDate] = useState('');
@@ -18,6 +17,8 @@ export default function BillsPage() {
 
   useEffect(() => {
     fetchBills();
+    window.addEventListener('ipon:data-changed', fetchBills);
+    return () => window.removeEventListener('ipon:data-changed', fetchBills);
   }, []);
 
   const fetchBills = async () => {
@@ -63,14 +64,13 @@ export default function BillsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Get current cutoff
     const { data: cutoff } = await supabase
       .from('cutoffs')
       .select('*')
       .eq('user_id', user.id)
       .order('start_date', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (cutoff) {
       await supabase.from('allocations').insert([
@@ -86,8 +86,7 @@ export default function BillsPage() {
       ]);
     }
 
-    // Advance due date
-    const d = new Date(bill.next_due_date);
+    const d = new Date(`${bill.next_due_date}T00:00:00`);
     if (bill.frequency === 'weekly') d.setDate(d.getDate() + 7);
     else if (bill.frequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
     else d.setMonth(d.getMonth() + 1);
@@ -100,53 +99,48 @@ export default function BillsPage() {
     fetchBills();
   };
 
-  // Compute 30-day projection
   const totalNext30Days = bills.reduce((acc, b) => acc + Number(b.expected_amount || 0), 0);
 
   return (
     <div className="p-4 space-y-5">
       <div className="flex justify-between items-center">
-        <h1 className="font-serif text-2xl font-bold text-[#143f34]">Recurring Bills</h1>
+        <h1 className="font-display font-semibold text-2xl text-jade">Recurring Bills</h1>
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="px-4 py-2 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-xs min-h-[44px]"
+          className="px-4 py-2 bg-jade text-paper font-bold rounded-xl text-xs min-h-[44px]"
         >
           + Add Bill
         </button>
       </div>
 
-      {/* Header Projection Card */}
-      <div className="bg-[#1f5d4c] text-[#f6f3ea] p-5 rounded-3xl shadow-lg space-y-1">
-        <span className="text-[11px] text-[#e2a63f] font-bold uppercase tracking-wider">Next 30 Days Forecast</span>
-        <h2 className="font-serif text-3xl font-extrabold">{formatMoney(totalNext30Days)}</h2>
-        <p className="text-xs text-[#f6f3ea]/80">Auto-deducts automatically from Available cash on due date.</p>
+      <div className="bg-jade text-paper p-5 rounded-card shadow-lg space-y-1">
+        <span className="text-[11px] text-gold font-bold uppercase tracking-wider">Next 30 Days Forecast</span>
+        <h2 className="font-display font-semibold text-3xl">{formatMoney(totalNext30Days)}</h2>
+        <p className="text-xs text-paper/80">Auto-deducts automatically from Available cash on due date.</p>
       </div>
 
-      {/* Bills List */}
       <div className="space-y-3">
         {bills.map((b) => (
-          <div key={b.id} className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-4 rounded-2xl space-y-2">
+          <div key={b.id} className="bg-paper border border-line p-4 rounded-card space-y-2">
             <div className="flex justify-between items-start">
               <div>
-                <p className="font-bold text-sm text-[#143f34]">{b.name}</p>
-                <p className="text-xs text-[#143f34]/60">
+                <p className="font-bold text-sm text-jade">{b.name}</p>
+                <p className="text-xs text-jade/60">
                   {b.next_due_date} · {b.frequency}
                 </p>
               </div>
-              <span className="font-serif font-extrabold text-[#c85c46] text-sm">
-                {formatMoney(Number(b.expected_amount))}
-              </span>
+              <span className="font-display font-extrabold text-coral text-sm">{formatMoney(Number(b.expected_amount))}</span>
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t border-[#1f5d4c]/10 text-xs">
-              <span className={`font-semibold ${b.auto_deduct ? 'text-[#1f5d4c]' : 'text-[#e2a63f]'}`}>
+            <div className="flex items-center justify-between pt-2 border-t border-line text-xs">
+              <span className={`font-semibold ${b.auto_deduct ? 'text-jade' : 'text-gold'}`}>
                 {b.auto_deduct ? '⚡ Auto-deduct ON' : '🖐 Manual pay'}
               </span>
 
               {!b.auto_deduct && (
                 <button
                   onClick={() => handleMarkPaid(b)}
-                  className="px-3 py-1.5 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-lg text-xs min-h-[44px]"
+                  className="px-3 py-1.5 bg-jade text-paper font-bold rounded-lg text-xs min-h-[44px]"
                 >
                   Mark Paid
                 </button>
@@ -156,23 +150,22 @@ export default function BillsPage() {
         ))}
       </div>
 
-      {/* Add Bill Bottom Sheet */}
       <BottomSheet isOpen={isAddModalOpen} onClose={() => setIsAddModalOpen(false)} title="Add Recurring Bill">
         <form onSubmit={handleAddBill} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold text-[#143f34] mb-1">Bill Name</label>
+            <label className="block text-xs font-bold text-jade mb-1">Bill Name</label>
             <input
               type="text"
               required
               placeholder="e.g. Fiber Internet"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#143f34] mb-1">Expected Amount (₱)</label>
+            <label className="block text-xs font-bold text-jade mb-1">Expected Amount (₱)</label>
             <input
               type="number"
               inputMode="decimal"
@@ -180,27 +173,27 @@ export default function BillsPage() {
               placeholder="e.g. 1699"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#143f34] mb-1">Next Due Date</label>
+            <label className="block text-xs font-bold text-jade mb-1">Next Due Date</label>
             <input
               type="date"
               required
               value={nextDueDate}
               onChange={(e) => setNextDueDate(e.target.value)}
-              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-[#143f34] mb-1">Frequency</label>
+            <label className="block text-xs font-bold text-jade mb-1">Frequency</label>
             <select
               value={frequency}
               onChange={(e: any) => setFrequency(e.target.value)}
-              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34] focus:outline-none focus:border-[#1f5d4c]"
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
             >
               <option value="weekly">Weekly</option>
               <option value="monthly">Monthly</option>
@@ -208,20 +201,17 @@ export default function BillsPage() {
             </select>
           </div>
 
-          <div className="flex items-center justify-between p-3 bg-[#1f5d4c]/10 rounded-2xl">
-            <span className="text-xs font-bold text-[#143f34]">Auto-deduct on due date</span>
+          <div className="flex items-center justify-between p-3 bg-jade/10 rounded-card">
+            <span className="text-xs font-bold text-jade">Auto-deduct on due date</span>
             <input
               type="checkbox"
               checked={autoDeduct}
               onChange={(e) => setAutoDeduct(e.target.checked)}
-              className="w-5 h-5 accent-[#1f5d4c]"
+              className="w-5 h-5 accent-jade"
             />
           </div>
 
-          <button
-            type="submit"
-            className="w-full py-3 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-sm min-h-[44px]"
-          >
+          <button type="submit" className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-sm min-h-[44px]">
             Save Recurring Bill
           </button>
         </form>

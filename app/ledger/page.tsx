@@ -9,18 +9,17 @@ export default function LedgerPage() {
   const [entries, setEntries] = useState<ProcessedLedgerEntry[]>([]);
   const [cutoffs, setCutoffs] = useState<any[]>([]);
   const [filter, setFilter] = useState<'all' | 'income' | 'savings' | 'bills' | 'other'>('all');
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchData();
+    window.addEventListener('ipon:data-changed', fetchData);
+    return () => window.removeEventListener('ipon:data-changed', fetchData);
   }, []);
 
   const fetchData = async () => {
-    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Trigger process due bills RPC
     await supabase.rpc('process_my_due_bills');
 
     const [{ data: incData }, { data: allocData }, { data: cutData }] = await Promise.all([
@@ -54,7 +53,6 @@ export default function LedgerPage() {
 
     const processed = computeRunningBalances([...rawIncomes, ...rawAllocations]);
     setEntries(processed);
-    setLoading(false);
   };
 
   const filteredEntries = entries.filter((e) => {
@@ -68,22 +66,19 @@ export default function LedgerPage() {
   return (
     <div className="p-4 space-y-5">
       <div className="flex items-center justify-between">
-        <Link href="/dashboard" className="text-xs font-bold text-[#1f5d4c] hover:underline flex items-center gap-1 min-h-[44px]">
+        <Link href="/dashboard" className="text-xs font-bold text-jade hover:underline flex items-center gap-1 min-h-[44px]">
           ← Back to Dashboard
         </Link>
-        <h1 className="font-serif text-xl font-bold text-[#143f34]">Continuous Ledger</h1>
+        <h1 className="font-display font-semibold text-xl text-jade">Continuous Ledger</h1>
       </div>
 
-      {/* Filter Chips */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
         {(['all', 'income', 'savings', 'bills', 'other'] as const).map((chip) => (
           <button
             key={chip}
             onClick={() => setFilter(chip)}
             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold capitalize transition min-h-[44px] ${
-              filter === chip
-                ? 'bg-[#1f5d4c] text-[#f6f3ea]'
-                : 'bg-[#1f5d4c]/10 text-[#143f34]/70 hover:bg-[#1f5d4c]/20'
+              filter === chip ? 'bg-jade text-paper' : 'bg-jade/10 text-jade/70 hover:bg-jade/20'
             }`}
           >
             {chip}
@@ -91,58 +86,42 @@ export default function LedgerPage() {
         ))}
       </div>
 
-      {/* Ledger Table / List View */}
-      {loading ? (
-        <div className="p-8 text-center text-xs text-[#143f34]/60">Loading ledger data...</div>
-      ) : (
-        <div className="space-y-3">
-          {filteredEntries.map((entry, idx) => {
-            // Cutoff Divider Logic
-            const cutoffStart = cutoffs.find(
-              (c) => c.id === entry.cutoff_id && idx === filteredEntries.findIndex((x) => x.cutoff_id === c.id)
-            );
+      <div className="space-y-3">
+        {filteredEntries.map((entry, idx) => {
+          const cutoffStart = cutoffs.find(
+            (c) => c.id === entry.cutoff_id && idx === filteredEntries.findIndex((x) => x.cutoff_id === c.id)
+          );
 
-            return (
-              <React.Fragment key={entry.id}>
-                {cutoffStart && (
-                  <div className="my-3 p-3 bg-[#e2a63f]/15 border border-[#e2a63f]/30 rounded-xl text-xs font-bold text-[#143f34] flex justify-between items-center">
-                    <span>
-                      Cutoff {cutoffStart.start_date} – {cutoffStart.end_date} Started
-                    </span>
-                    <span className="text-[10px] text-[#143f34]/60">
-                      Carried In: {formatMoney(Number(cutoffStart.carried_in_savings || 0))}
-                    </span>
-                  </div>
-                )}
+          return (
+            <React.Fragment key={entry.id}>
+              {cutoffStart && (
+                <div className="my-3 p-3 bg-gold/15 border border-gold/30 rounded-card text-xs font-bold text-jade flex justify-between items-center">
+                  <span>Cutoff {cutoffStart.start_date} – {cutoffStart.end_date} Started</span>
+                  <span className="text-[10px] text-jade/60">Carried In: {formatMoney(Number(cutoffStart.carried_in_savings || 0))}</span>
+                </div>
+              )}
 
-                <div className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-4 rounded-2xl flex items-center justify-between shadow-xs">
-                  <div className="space-y-1">
-                    <p className="font-bold text-sm text-[#143f34]">{entry.note}</p>
-                    <div className="flex items-center gap-2 text-[11px] text-[#143f34]/60">
-                      <span>{new Date(entry.created_at).toLocaleDateString()}</span>
-                      <span>•</span>
-                      <span className="capitalize font-medium">{entry.category}</span>
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <span
-                      className={`text-sm font-extrabold ${
-                        entry.type === 'income' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'
-                      }`}
-                    >
-                      {entry.type === 'income' ? '+' : '-'} {formatMoney(entry.amount)}
-                    </span>
-                    <p className="text-[10px] text-[#143f34]/50 mt-0.5">
-                      Bal: {formatMoney(entry.runningAvailableBalance)}
-                    </p>
+              <div className="bg-paper border border-line p-4 rounded-card flex items-center justify-between shadow-xs">
+                <div className="space-y-1">
+                  <p className="font-bold text-sm text-jade">{entry.note}</p>
+                  <div className="flex items-center gap-2 text-[11px] text-jade/60">
+                    <span>{new Date(entry.created_at).toLocaleDateString()}</span>
+                    <span>•</span>
+                    <span className="capitalize font-medium">{entry.category}</span>
                   </div>
                 </div>
-              </React.Fragment>
-            );
-          })}
-        </div>
-      )}
+
+                <div className="text-right">
+                  <span className={`text-sm font-extrabold ${entry.type === 'income' ? 'text-jade' : 'text-coral'}`}>
+                    {entry.type === 'income' ? '+' : '-'} {formatMoney(entry.amount)}
+                  </span>
+                  <p className="text-[10px] text-jade/50 mt-0.5">Bal: {formatMoney(entry.runningAvailableBalance)}</p>
+                </div>
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }

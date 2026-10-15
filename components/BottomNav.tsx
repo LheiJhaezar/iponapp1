@@ -1,31 +1,47 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import BottomSheet from './BottomSheet';
+import { useQuickActions } from './QuickActionsContext';
 import { supabase } from '@/lib/supabase/client';
 
 export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+  const { openSheet } = useQuickActions();
+  const [hasUnread, setHasUnread] = useState(false);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
 
   const isAuthPage = pathname?.startsWith('/login') || pathname?.startsWith('/signup');
-  if (isAuthPage) return null;
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
+  useEffect(() => {
+    if (!isAuthPage) {
+      checkBuddyNotifications();
+    }
+  }, [pathname]);
+
+  const checkBuddyNotifications = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const [{ count: notifCount }, { count: pendingCount }] = await Promise.all([
+      supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('is_read', false),
+      supabase.from('buddy_links').select('*', { count: 'exact', head: true }).eq('addressee_id', user.id).eq('status', 'pending'),
+    ]);
+
+    setHasUnread((notifCount || 0) > 0 || (pendingCount || 0) > 0);
   };
+
+  if (isAuthPage) return null;
 
   return (
     <>
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-[#f6f3ea] border-t border-[#1f5d4c]/15 h-[84px] pb-[env(safe-area-inset-bottom)] flex items-center justify-around max-w-[480px] mx-auto">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-paper border-t border-line h-[84px] pb-[env(safe-area-inset-bottom)] flex items-center justify-around max-w-[480px] mx-auto">
         <Link
           href="/dashboard"
           className={`flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/dashboard' ? 'text-[#1f5d4c]' : 'text-[#143f34]/50'
+            pathname === '/dashboard' ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
           <span className="text-lg">🏠</span>
@@ -35,18 +51,16 @@ export default function BottomNav() {
         <Link
           href="/bills"
           className={`flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/bills' ? 'text-[#1f5d4c]' : 'text-[#143f34]/50'
+            pathname === '/bills' ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
           <span className="text-lg">🧾</span>
           <span>Bills</span>
         </Link>
 
-        {/* Center Plus Action Trigger */}
         <button
-          onClick={() => setIsPlusMenuOpen(true)}
-          className="w-14 h-14 bg-[#1f5d4c] hover:bg-[#143f34] text-[#f6f3ea] rounded-full flex items-center justify-center text-2xl font-bold shadow-lg transition-transform active:scale-95 border-2 border-[#e2a63f] -mt-5"
-          aria-label="Quick Actions"
+          onClick={() => setIsActionsOpen(!isActionsOpen)}
+          className="w-14 h-14 bg-jade hover:bg-[#143f34] text-paper rounded-full flex items-center justify-center text-2xl font-bold shadow-lg transition-transform active:scale-95 border-2 border-gold -mt-5 min-w-[44px] min-h-[44px]"
         >
           +
         </button>
@@ -54,7 +68,7 @@ export default function BottomNav() {
         <Link
           href="/food"
           className={`flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/food' ? 'text-[#1f5d4c]' : 'text-[#143f34]/50'
+            pathname === '/food' ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
           <span className="text-lg">🍲</span>
@@ -63,64 +77,50 @@ export default function BottomNav() {
 
         <Link
           href="/buddy"
-          className={`flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/buddy' ? 'text-[#1f5d4c]' : 'text-[#143f34]/50'
+          className={`relative flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
+            pathname === '/buddy' ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
+          {hasUnread && <span className="absolute top-1 right-2 w-2.5 h-2.5 bg-coral rounded-full border border-paper" />}
           <span className="text-lg">🤝</span>
           <span>Buddy</span>
         </Link>
       </nav>
 
-      {/* Quick Actions Sheet */}
-      <BottomSheet
-        isOpen={isPlusMenuOpen}
-        onClose={() => setIsPlusMenuOpen(false)}
-        title="Quick Actions"
-      >
-        <div className="grid grid-cols-2 gap-3 py-2">
-          <button
-            onClick={() => { setIsPlusMenuOpen(false); router.push('/dashboard?action=income'); }}
-            className="p-4 bg-[#1f5d4c]/10 border border-[#1f5d4c]/20 rounded-2xl flex flex-col items-center gap-2 text-[#143f34] font-bold text-sm hover:bg-[#1f5d4c]/20 transition min-h-[80px] justify-center"
-          >
-            <span className="text-2xl">💵</span>
-            <span>Log Income</span>
-          </button>
-
-          <button
-            onClick={() => { setIsPlusMenuOpen(false); router.push('/dashboard?action=allocate'); }}
-            className="p-4 bg-[#c85c46]/10 border border-[#c85c46]/20 rounded-2xl flex flex-col items-center gap-2 text-[#c85c46] font-bold text-sm hover:bg-[#c85c46]/20 transition min-h-[80px] justify-center"
-          >
-            <span className="text-2xl">💸</span>
-            <span>Allocate</span>
-          </button>
-
-          <button
-            onClick={() => { setIsPlusMenuOpen(false); router.push('/food?action=log'); }}
-            className="p-4 bg-[#e2a63f]/15 border border-[#e2a63f]/30 rounded-2xl flex flex-col items-center gap-2 text-[#143f34] font-bold text-sm hover:bg-[#e2a63f]/25 transition min-h-[80px] justify-center"
-          >
-            <span className="text-2xl">🍱</span>
-            <span>Log Food</span>
-          </button>
-
-          <button
-            onClick={() => { setIsPlusMenuOpen(false); router.push('/food?action=mood'); }}
-            className="p-4 bg-[#1f5d4c]/10 border border-[#1f5d4c]/20 rounded-2xl flex flex-col items-center gap-2 text-[#143f34] font-bold text-sm hover:bg-[#1f5d4c]/20 transition min-h-[80px] justify-center"
-          >
-            <span className="text-2xl">😊</span>
-            <span>Log Mood</span>
-          </button>
+      {isActionsOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end justify-center pb-24 p-4" onClick={() => setIsActionsOpen(false)}>
+          <div className="bg-paper border border-line rounded-card p-4 w-full max-w-[400px] grid grid-cols-2 gap-3 shadow-2xl animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => { setIsActionsOpen(false); openSheet('income'); }}
+              className="p-3 bg-jade/10 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-jade/20 min-h-[64px] justify-center"
+            >
+              <span className="text-xl">💵</span>
+              <span>Log Income</span>
+            </button>
+            <button
+              onClick={() => { setIsActionsOpen(false); openSheet('allocate'); }}
+              className="p-3 bg-coral/10 rounded-xl flex flex-col items-center gap-1 text-coral font-bold text-xs hover:bg-coral/20 min-h-[64px] justify-center"
+            >
+              <span className="text-xl">💸</span>
+              <span>Allocate</span>
+            </button>
+            <button
+              onClick={() => { setIsActionsOpen(false); router.push('/food'); }}
+              className="p-3 bg-gold/15 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-gold/25 min-h-[64px] justify-center"
+            >
+              <span className="text-xl">🍱</span>
+              <span>Log Food</span>
+            </button>
+            <button
+              onClick={() => { setIsActionsOpen(false); openSheet('mood'); }}
+              className="p-3 bg-jade/10 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-jade/20 min-h-[64px] justify-center"
+            >
+              <span className="text-xl">😊</span>
+              <span>Log Mood</span>
+            </button>
+          </div>
         </div>
-
-        <div className="pt-4 border-t border-[#1f5d4c]/10 flex justify-between items-center">
-          <button
-            onClick={handleLogout}
-            className="w-full py-3 bg-[#c85c46]/15 hover:bg-[#c85c46]/25 text-[#c85c46] font-bold rounded-xl text-sm transition min-h-[44px]"
-          >
-            Log Out
-          </button>
-        </div>
-      </BottomSheet>
+      )}
     </>
   );
 }

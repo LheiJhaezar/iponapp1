@@ -1,8 +1,39 @@
+import { daysBetween, todayLocal } from './dates';
+
 export function formatMoney(amount: number): string {
   return `₱${amount.toLocaleString('en-PH', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })}`;
+}
+
+export interface SafeToSpendResult {
+  perDay: number;
+  safeTotal: number;
+  daysLeft: number;
+  committedBills: number;
+  stillToSave: number;
+}
+
+export function computeSafeToSpend(
+  available: number,
+  cutoffEndDate: string,
+  targetAmount: number,
+  savedThisCutoff: number,
+  activeBills: Array<{ expected_amount: number; next_due_date: string }>
+): SafeToSpendResult {
+  const today = todayLocal();
+  const daysLeft = Math.max(1, daysBetween(today, cutoffEndDate) + 1);
+
+  const committedBills = activeBills
+    .filter((b) => b.next_due_date && b.next_due_date <= cutoffEndDate)
+    .reduce((acc, curr) => acc + Number(curr.expected_amount || 0), 0);
+
+  const stillToSave = Math.max(0, targetAmount - savedThisCutoff);
+  const safeTotal = available - committedBills - stillToSave;
+  const perDay = safeTotal / daysLeft;
+
+  return { perDay, safeTotal, daysLeft, committedBills, stillToSave };
 }
 
 export interface RawLedgerEntry {

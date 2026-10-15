@@ -1,61 +1,97 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase/client';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    router.push("/dashboard");
-    router.refresh();
-  }
+    setErrorMsg('');
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+      setLoading(false);
+    } else {
+      router.replace('/dashboard');
+      router.refresh();
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setErrorMsg('');
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+
+    if (error) setErrorMsg(error.message);
+  };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-5" style={{ background: "var(--paper)" }}>
-      <div className="w-full max-w-sm">
-        <h1 className="font-display font-semibold text-4xl mb-1" style={{ color: "var(--ink)" }}>Ipon</h1>
-        <p className="text-sm mb-8" style={{ color: "var(--ink-soft)" }}>Welcome back — log in to your dashboard.</p>
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="bg-paper border border-line rounded-card max-w-sm w-full p-6 space-y-5 shadow-xl">
+        <div>
+          <h1 className="font-display font-semibold text-2xl text-jade">Log in to Ipon</h1>
+          <p className="text-xs text-jade/60 mt-1">Access your continuous cutoff ledger.</p>
+        </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Email</label>
-            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm border"
-              style={{ borderColor: "var(--line)", background: "var(--paper-raised)", color: "var(--ink)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Password</label>
-            <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm border"
-              style={{ borderColor: "var(--line)", background: "var(--paper-raised)", color: "var(--ink)" }} />
-          </div>
+        {errorMsg && <p className="text-xs text-coral font-bold bg-coral/10 p-2.5 rounded-xl">{errorMsg}</p>}
 
-          {error && <p className="text-sm" style={{ color: "var(--coral)" }}>{error}</p>}
+        <button
+          onClick={handleGoogleLogin}
+          type="button"
+          className="w-full flex items-center justify-center gap-2 py-3 bg-paper border border-line text-jade font-semibold rounded-xl text-xs transition min-h-[44px]"
+        >
+          Continue with Google
+        </button>
 
-          <button type="submit" disabled={loading}
-            className="w-full font-bold rounded-xl py-3 text-sm text-white mt-1 disabled:opacity-60"
-            style={{ background: "var(--jade)" }}>
-            {loading ? "Logging in..." : "Log in"}
+        <form onSubmit={handleEmailLogin} className="space-y-3">
+          <input
+            type="email"
+            required
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+          />
+          <input
+            type="password"
+            required
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-xs min-h-[44px]"
+          >
+            {loading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
 
-        <p className="text-sm mt-6" style={{ color: "var(--ink-soft)" }}>
-          No account yet?{" "}
-          <Link href="/signup" className="font-bold" style={{ color: "var(--jade)" }}>Sign up</Link>
+        <p className="text-center text-xs text-jade/60">
+          Don't have an account?{' '}
+          <Link href="/signup" className="text-jade font-bold hover:underline">
+            Sign Up
+          </Link>
         </p>
       </div>
     </div>

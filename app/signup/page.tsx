@@ -1,83 +1,90 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import React, { useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase/client';
 
 export default function SignupPage() {
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
-  const supabase = createClient();
 
-  async function handleSubmit(e: React.FormEvent) {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError(null);
-    const { error } = await supabase.auth.signUp({
-      email, password,
-      options: { data: { full_name: fullName } },
-    });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    setDone(true);
-  }
+    setErrorMsg('');
+    setSuccessMsg('');
 
-  if (done) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-5 text-center" style={{ background: "var(--paper)" }}>
-        <div className="max-w-sm">
-          <h1 className="font-display text-2xl font-semibold mb-3" style={{ color: "var(--ink)" }}>Check your email</h1>
-          <p className="text-sm mb-6" style={{ color: "var(--ink-soft)" }}>
-            We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account, then log in.
-          </p>
-          <Link href="/login" className="font-bold text-sm" style={{ color: "var(--jade)" }}>Back to login</Link>
-        </div>
-      </div>
-    );
-  }
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (data?.session) {
+      router.replace('/dashboard');
+      router.refresh();
+    } else {
+      setSuccessMsg('Account created! Please check your email inbox to confirm your account.');
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-5" style={{ background: "var(--paper)" }}>
-      <div className="w-full max-w-sm">
-        <h1 className="font-display font-semibold text-4xl mb-1" style={{ color: "var(--ink)" }}>Ipon</h1>
-        <p className="text-sm mb-8" style={{ color: "var(--ink-soft)" }}>Create your account to start tracking.</p>
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="bg-paper border border-line rounded-card max-w-sm w-full p-6 space-y-5 shadow-xl">
+        <div>
+          <h1 className="font-display font-semibold text-2xl text-jade">Create Ipon Account</h1>
+          <p className="text-xs text-jade/60 mt-1">Start your continuous savings ledger.</p>
+        </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Full name</label>
-            <input type="text" required value={fullName} onChange={(e) => setFullName(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm border"
-              style={{ borderColor: "var(--line)", background: "var(--paper-raised)", color: "var(--ink)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Email</label>
-            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm border"
-              style={{ borderColor: "var(--line)", background: "var(--paper-raised)", color: "var(--ink)" }} />
-          </div>
-          <div>
-            <label className="text-xs font-bold block mb-1" style={{ color: "var(--ink-soft)" }}>Password</label>
-            <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm border"
-              style={{ borderColor: "var(--line)", background: "var(--paper-raised)", color: "var(--ink)" }} />
-          </div>
+        {errorMsg && <p className="text-xs text-coral font-bold bg-coral/10 p-2.5 rounded-xl">{errorMsg}</p>}
+        {successMsg && <p className="text-xs text-jade font-bold bg-jade/10 p-2.5 rounded-xl">{successMsg}</p>}
 
-          {error && <p className="text-sm" style={{ color: "var(--coral)" }}>{error}</p>}
-
-          <button type="submit" disabled={loading}
-            className="w-full font-bold rounded-xl py-3 text-sm text-white mt-1 disabled:opacity-60"
-            style={{ background: "var(--jade)" }}>
-            {loading ? "Creating account..." : "Sign up"}
+        <form onSubmit={handleSignUp} className="space-y-3">
+          <input
+            type="email"
+            required
+            placeholder="Email Address"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+          />
+          <input
+            type="password"
+            required
+            minLength={6}
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-xs min-h-[44px]"
+          >
+            {loading ? 'Creating Account...' : 'Sign Up'}
           </button>
         </form>
 
-        <p className="text-sm mt-6" style={{ color: "var(--ink-soft)" }}>
-          Already have an account?{" "}
-          <Link href="/login" className="font-bold" style={{ color: "var(--jade)" }}>Log in</Link>
+        <p className="text-center text-xs text-jade/60">
+          Already have an account?{' '}
+          <Link href="/login" className="text-jade font-bold hover:underline">
+            Log In
+          </Link>
         </p>
       </div>
     </div>
