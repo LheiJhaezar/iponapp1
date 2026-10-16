@@ -4,8 +4,9 @@ import React, { createContext, useContext, useState } from 'react';
 import BottomSheet from './BottomSheet';
 import { supabase } from '@/lib/supabase/client';
 import { todayLocal } from '@/lib/dates';
+import { useDataVersion } from './DataContext';
 
-type SheetType = 'income' | 'allocate' | 'food' | 'mood' | null;
+type SheetType = 'income' | 'allocate' | 'mood' | null;
 
 interface QuickActionsContextType {
   openSheet: (type: SheetType) => void;
@@ -20,10 +21,12 @@ const QuickActionsContext = createContext<QuickActionsContextType>({
 export const useQuickActions = () => useContext(QuickActionsContext);
 
 export function QuickActionsProvider({ children }: { children: React.ReactNode }) {
+  const { notifyDataChanged } = useDataVersion();
   const [activeSheet, setActiveSheet] = useState<SheetType>(null);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [category, setCategory] = useState('savings');
+  const [entryDate, setEntryDate] = useState(todayLocal());
   const [mood, setMood] = useState('Happy');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -31,16 +34,11 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     setErrorMsg('');
     setAmount('');
     setNote('');
+    setEntryDate(todayLocal());
     setActiveSheet(type);
   };
 
   const closeSheet = () => setActiveSheet(null);
-
-  const dispatchChange = () => {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('ipon:data-changed'));
-    }
-  };
 
   const handleLogIncome = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,23 +47,25 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
 
     const { data: cutoff } = await supabase
       .from('cutoffs')
-      .select('id')
+      .select('id, closed_at')
       .eq('user_id', user.id)
-      .order('start_date', { ascending: false })
-      .limit(1)
+      .lte('start_date', entryDate)
+      .gte('end_date', entryDate)
+      .is('deleted_at', null)
       .maybeSingle();
 
-    if (!cutoff) {
-      setErrorMsg('Create your first cutoff before adding income.');
+    if (cutoff?.closed_at) {
+      setErrorMsg('This cutoff is locked. Reopen it to add entries.');
       return;
     }
 
     const { error } = await supabase.from('income_entries').insert([
       {
         user_id: user.id,
-        cutoff_id: cutoff.id,
+        cutoff_id: cutoff?.id,
         amount: parseFloat(amount),
         source: note || 'Salary Income',
+        entry_date: entryDate,
       },
     ]);
 
@@ -73,7 +73,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
       setErrorMsg(error.message);
     } else {
       closeSheet();
-      dispatchChange();
+      notifyDataChanged();
     }
   };
 
@@ -84,24 +84,26 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
 
     const { data: cutoff } = await supabase
       .from('cutoffs')
-      .select('id')
+      .select('id, closed_at')
       .eq('user_id', user.id)
-      .order('start_date', { ascending: false })
-      .limit(1)
+      .lte('start_date', entryDate)
+      .gte('end_date', entryDate)
+      .is('deleted_at', null)
       .maybeSingle();
 
-    if (!cutoff) {
-      setErrorMsg('Create your first cutoff before allocating funds.');
+    if (cutoff?.closed_at) {
+      setErrorMsg('This cutoff is locked. Reopen it to add entries.');
       return;
     }
 
     const { error } = await supabase.from('allocations').insert([
       {
         user_id: user.id,
-        cutoff_id: cutoff.id,
+        cutoff_id: cutoff?.id,
         category,
         amount: parseFloat(amount),
         note: note || category,
+        entry_date: entryDate,
       },
     ]);
 
@@ -109,7 +111,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
       setErrorMsg(error.message);
     } else {
       closeSheet();
-      dispatchChange();
+      notifyDataChanged();
     }
   };
 
@@ -121,7 +123,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     const { error } = await supabase.from('mood_entries').upsert(
       {
         user_id: user.id,
-        log_date: todayLocal(),
+        log_date: entryDate,
         mood,
         note,
       },
@@ -132,7 +134,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
       setErrorMsg(error.message);
     } else {
       closeSheet();
-      dispatchChange();
+      notifyDataChanged();
     }
   };
 
@@ -143,6 +145,16 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
       <BottomSheet isOpen={activeSheet === 'income'} onClose={closeSheet} title="Log Income">
         <form onSubmit={handleLogIncome} className="space-y-4">
           {errorMsg && <p className="text-xs text-coral font-bold">{errorMsg}</p>}
+          <div>
+            <label className="block text-xs font-bold text-jade mb-1">Entry Date</label>
+            <input
+              type="date"
+              required
+              value={entryDate}
+              onChange={(e) => setEntryDate(e.target.value)}
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+            />
+          </div>
           <input
             type="number"
             inputMode="decimal"
@@ -150,14 +162,14 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
             placeholder="Income Amount (₱)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
           />
           <input
             type="text"
-            placeholder="Source / Note (e.g. Cutoff Pay)"
+            placeholder="Source / Note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
           />
           <button type="submit" className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-sm min-h-[44px]">
             Save Income
@@ -168,10 +180,20 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
       <BottomSheet isOpen={activeSheet === 'allocate'} onClose={closeSheet} title="Allocate Funds">
         <form onSubmit={handleAllocate} className="space-y-4">
           {errorMsg && <p className="text-xs text-coral font-bold">{errorMsg}</p>}
+          <div>
+            <label className="block text-xs font-bold text-jade mb-1">Entry Date</label>
+            <input
+              type="date"
+              required
+              value={entryDate}
+              onChange={(e) => setEntryDate(e.target.value)}
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+            />
+          </div>
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
           >
             <option value="savings">Savings Target</option>
             <option value="bills">Bills</option>
@@ -185,14 +207,14 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
             placeholder="Amount (₱)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
           />
           <input
             type="text"
             placeholder="Note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
+            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
           />
           <button type="submit" className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-sm min-h-[44px]">
             Confirm Allocation
@@ -217,13 +239,6 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
               </button>
             ))}
           </div>
-          <input
-            type="text"
-            placeholder="Optional Note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade focus:outline-none"
-          />
           <button type="submit" className="w-full py-3 bg-jade text-paper font-bold rounded-xl text-sm min-h-[44px]">
             Save Mood
           </button>

@@ -3,125 +3,168 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
-import { computeRunningBalances, formatMoney, ProcessedLedgerEntry } from '@/lib/money';
+import { formatMoney } from '@/lib/money';
+import BottomSheet from '@/components/BottomSheet';
+import { useDataVersion } from '@/components/DataContext';
 
 export default function LedgerPage() {
-  const [entries, setEntries] = useState<ProcessedLedgerEntry[]>([]);
-  const [cutoffs, setCutoffs] = useState<any[]>([]);
-  const [filter, setFilter] = useState<'all' | 'income' | 'savings' | 'bills' | 'other'>('all');
+  const { dataVersion, notifyDataChanged } = useDataVersion();
+  const [entries, setEntries] = useState<any[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+
+  const [selectedEntry, setSelectedEntry] = useState<any>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editNote, setEditNote] = useState('');
+  const [editDate, setEditDate] = useState('');
 
   useEffect(() => {
-    fetchData();
-    window.addEventListener('ipon:data-changed', fetchData);
-    return () => window.removeEventListener('ipon:data-changed', fetchData);
-  }, []);
+    fetchLedger(0, true);
+  }, [dataVersion]);
 
-  const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  const fetchLedger = async (currentOffset: number, reset = false) => {
+    const { data } = await supabase.rpc('get_ledger', {
+      p_limit: 50,
+      p_offset: currentOffset,
+      p_deleted: false,
+    });
 
-    await supabase.rpc('process_my_due_bills');
+    if (data) {
+      if (reset) setEntries(data);
+      else setEntries((prev) => [...prev, ...data]);
 
-    const [{ data: incData }, { data: allocData }, { data: cutData }] = await Promise.all([
-      supabase.from('income_entries').select('*').eq('user_id', user.id),
-      supabase.from('allocations').select('*').eq('user_id', user.id),
-      supabase.from('cutoffs').select('*').eq('user_id', user.id).order('start_date', { ascending: true }),
-    ]);
-
-    setCutoffs(cutData || []);
-
-    const rawIncomes = (incData || []).map((i) => ({
-      id: i.id,
-      created_at: i.created_at,
-      type: 'income' as const,
-      amount: Number(i.amount),
-      category: 'income',
-      note: i.source || i.note || 'Income Deposit',
-      cutoff_id: i.cutoff_id,
-    }));
-
-    const rawAllocations = (allocData || []).map((a) => ({
-      id: a.id,
-      created_at: a.created_at,
-      type: 'allocation' as const,
-      amount: Number(a.amount),
-      category: a.category,
-      note: a.note || a.category,
-      cutoff_id: a.cutoff_id,
-      due_date: a.due_date,
-    }));
-
-    const processed = computeRunningBalances([...rawIncomes, ...rawAllocations]);
-    setEntries(processed);
+      setHasMore(data.length === 50);
+      setOffset(currentOffset + 50);
+    }
   };
 
-  const filteredEntries = entries.filter((e) => {
-    if (filter === 'all') return true;
-    if (filter === 'income') return e.type === 'income';
-    if (filter === 'savings') return e.category === 'savings';
-    if (filter === 'bills') return e.category === 'bills';
-    return e.category !== 'savings' && e.category !== 'bills' && e.type !== 'income';
-  });
+  const handleRowClick = (entry: any) => {
+    setSelectedEntry(entry);
+    setEditAmount(String(entry.amount));
+    setEditNote(entry.note);
+    setEditDate(entry.entry_date);
+  };
+
+  const handleSaveEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEntry) return;
+
+    const table = selectedEntry.kind === 'income' ? 'income_entries' : 'allocations';
+    await supabase
+      .from(table)
+      .update({
+        amount: parseFloat(editAmount),
+        note: editNote,
+        entry_date: editDate,
+      })
+      .eq('id', selectedEntry.id);
+
+    setSelectedEntry(null);
+    notifyDataChanged();
+  };
+
+  const handleSoftDelete = async () => {
+    if (!selectedEntry) return;
+
+    const table = selectedEntry.kind === 'income' ? 'income_entries' : 'allocations';
+    await supabase
+      .from(table)
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', selectedEntry.id);
+
+    setSelectedEntry(null);
+    notifyDataChanged();
+  };
 
   return (
     <div className="p-4 space-y-5">
       <div className="flex items-center justify-between">
-        <Link href="/dashboard" className="text-xs font-bold text-jade hover:underline flex items-center gap-1 min-h-[44px]">
-          ← Back to Dashboard
+        <Link href="/dashboard" className="text-xs font-bold text-jade hover:underline">
+          ← Dashboard
         </Link>
         <h1 className="font-display font-semibold text-xl text-jade">Continuous Ledger</h1>
       </div>
 
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {(['all', 'income', 'savings', 'bills', 'other'] as const).map((chip) => (
-          <button
-            key={chip}
-            onClick={() => setFilter(chip)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold capitalize transition min-h-[44px] ${
-              filter === chip ? 'bg-jade text-paper' : 'bg-jade/10 text-jade/70 hover:bg-jade/20'
-            }`}
+      <div className="space-y-2">
+        {entries.map((entry) => (
+          <div
+            key={entry.id}
+            onClick={() => handleRowClick(entry)}
+            className="bg-paper border border-line p-3 rounded-card flex justify-between items-center cursor-pointer hover:bg-jade/5"
           >
-            {chip}
-          </button>
+            <div>
+              <p className="text-xs font-bold text-jade">{entry.note}</p>
+              <span className="text-[10px] text-jade/60">{entry.entry_date}</span>
+            </div>
+            <div className="text-right">
+              <span className={`text-xs font-extrabold ${entry.kind === 'income' ? 'text-jade' : 'text-coral'}`}>
+                {entry.kind === 'income' ? '+' : '-'} {formatMoney(Number(entry.amount))}
+              </span>
+              <p className="text-[10px] text-jade/50">Bal: {formatMoney(Number(entry.running_available))}</p>
+            </div>
+          </div>
         ))}
       </div>
 
-      <div className="space-y-3">
-        {filteredEntries.map((entry, idx) => {
-          const cutoffStart = cutoffs.find(
-            (c) => c.id === entry.cutoff_id && idx === filteredEntries.findIndex((x) => x.cutoff_id === c.id)
-          );
+      {hasMore && (
+        <button
+          onClick={() => fetchLedger(offset)}
+          className="w-full py-3 bg-jade/10 text-jade font-bold rounded-xl text-xs min-h-[44px]"
+        >
+          Load More
+        </button>
+      )}
 
-          return (
-            <React.Fragment key={entry.id}>
-              {cutoffStart && (
-                <div className="my-3 p-3 bg-gold/15 border border-gold/30 rounded-card text-xs font-bold text-jade flex justify-between items-center">
-                  <span>Cutoff {cutoffStart.start_date} – {cutoffStart.end_date} Started</span>
-                  <span className="text-[10px] text-jade/60">Carried In: {formatMoney(Number(cutoffStart.carried_in_savings || 0))}</span>
-                </div>
-              )}
+      {/* Edit Entry Sheet */}
+      <BottomSheet isOpen={!!selectedEntry} onClose={() => setSelectedEntry(null)} title="Edit Entry">
+        <form onSubmit={handleSaveEntry} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-jade mb-1">Date</label>
+            <input
+              type="date"
+              required
+              value={editDate}
+              onChange={(e) => setEditDate(e.target.value)}
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+            />
+          </div>
 
-              <div className="bg-paper border border-line p-4 rounded-card flex items-center justify-between shadow-xs">
-                <div className="space-y-1">
-                  <p className="font-bold text-sm text-jade">{entry.note}</p>
-                  <div className="flex items-center gap-2 text-[11px] text-jade/60">
-                    <span>{new Date(entry.created_at).toLocaleDateString()}</span>
-                    <span>•</span>
-                    <span className="capitalize font-medium">{entry.category}</span>
-                  </div>
-                </div>
+          <div>
+            <label className="block text-xs font-bold text-jade mb-1">Amount (₱)</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              required
+              value={editAmount}
+              onChange={(e) => setEditAmount(e.target.value)}
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+            />
+          </div>
 
-                <div className="text-right">
-                  <span className={`text-sm font-extrabold ${entry.type === 'income' ? 'text-jade' : 'text-coral'}`}>
-                    {entry.type === 'income' ? '+' : '-'} {formatMoney(entry.amount)}
-                  </span>
-                  <p className="text-[10px] text-jade/50 mt-0.5">Bal: {formatMoney(entry.runningAvailableBalance)}</p>
-                </div>
-              </div>
-            </React.Fragment>
-          );
-        })}
-      </div>
+          <div>
+            <label className="block text-xs font-bold text-jade mb-1">Note</label>
+            <input
+              type="text"
+              value={editNote}
+              onChange={(e) => setEditNote(e.target.value)}
+              className="w-full bg-paper border border-line rounded-xl p-3 text-base text-jade"
+            />
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button type="submit" className="flex-1 py-3 bg-jade text-paper font-bold rounded-xl text-xs min-h-[44px]">
+              Save Entry
+            </button>
+            <button
+              type="button"
+              onClick={handleSoftDelete}
+              className="px-4 py-3 bg-coral/15 text-coral font-bold rounded-xl text-xs min-h-[44px]"
+            >
+              Delete
+            </button>
+          </div>
+        </form>
+      </BottomSheet>
     </div>
   );
 }
