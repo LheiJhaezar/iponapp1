@@ -38,7 +38,18 @@ export async function middleware(request: NextRequest) {
     request.nextUrl.pathname.startsWith('/login') ||
     request.nextUrl.pathname.startsWith('/signup');
 
-  const protectedRoutes = ['/dashboard', '/bills', '/food', '/buddy', '/ledger'];
+  const protectedRoutes = [
+    '/dashboard',
+    '/bills',
+    '/food',
+    '/buddy',
+    '/ledger',
+    '/wealth',
+    '/more',
+    '/trash',
+    '/reports',
+  ];
+
   const isProtectedRoute = protectedRoutes.some((route) =>
     request.nextUrl.pathname.startsWith(route)
   );
@@ -61,6 +72,10 @@ export const config = {
     '/food/:path*',
     '/buddy/:path*',
     '/ledger/:path*',
+    '/wealth/:path*',
+    '/more/:path*',
+    '/trash/:path*',
+    '/reports/:path*',
     '/login',
     '/signup',
   ],
