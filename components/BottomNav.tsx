@@ -17,11 +17,11 @@ export default function BottomNav() {
 
   useEffect(() => {
     if (!isAuthPage) {
-      checkBuddyNotifications();
+      checkNotifications();
     }
   }, [pathname]);
 
-  const checkBuddyNotifications = async () => {
+  const checkNotifications = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -66,30 +66,30 @@ export default function BottomNav() {
         </button>
 
         <Link
-          href="/food"
+          href="/wealth"
           className={`flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/food' ? 'text-jade font-bold' : 'text-jade/50'
+            pathname?.startsWith('/wealth') ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
-          <span className="text-lg">🍲</span>
-          <span>Food</span>
+          <span className="text-lg">💎</span>
+          <span>Wealth</span>
         </Link>
 
         <Link
-          href="/buddy"
+          href="/more"
           className={`relative flex flex-col items-center justify-center min-w-[44px] min-h-[44px] text-xs font-semibold ${
-            pathname === '/buddy' ? 'text-jade font-bold' : 'text-jade/50'
+            pathname?.startsWith('/more') ? 'text-jade font-bold' : 'text-jade/50'
           }`}
         >
           {hasUnread && <span className="absolute top-1 right-2 w-2.5 h-2.5 bg-coral rounded-full border border-paper" />}
-          <span className="text-lg">🤝</span>
-          <span>Buddy</span>
+          <span className="text-lg">⚙️</span>
+          <span>More</span>
         </Link>
       </nav>
 
       {isActionsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end justify-center pb-24 p-4" onClick={() => setIsActionsOpen(false)}>
-          <div className="bg-paper border border-line rounded-card p-4 w-full max-w-[400px] grid grid-cols-2 gap-3 shadow-2xl animate-in slide-in-from-bottom duration-200" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-paper border border-line rounded-card p-4 w-full max-w-[400px] grid grid-cols-2 gap-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => { setIsActionsOpen(false); openSheet('income'); }}
               className="p-3 bg-jade/10 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-jade/20 min-h-[64px] justify-center"
@@ -105,11 +105,11 @@ export default function BottomNav() {
               <span>Allocate</span>
             </button>
             <button
-              onClick={() => { setIsActionsOpen(false); router.push('/food'); }}
+              onClick={() => { setIsActionsOpen(false); openSheet('transfer'); }}
               className="p-3 bg-gold/15 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-gold/25 min-h-[64px] justify-center"
             >
-              <span className="text-xl">🍱</span>
-              <span>Log Food</span>
+              <span className="text-xl">🔄</span>
+              <span>Transfer</span>
             </button>
             <button
               onClick={() => { setIsActionsOpen(false); openSheet('mood'); }}
