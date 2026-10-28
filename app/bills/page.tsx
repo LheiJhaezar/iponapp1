@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { formatMoney } from '@/lib/money';
 import BottomSheet from '@/components/BottomSheet';
-import { addDays, addMonthsClamped } from '@/lib/dates';
+import { todayLocal, addDays, advanceDue, frequencyLabel, FREQUENCY_OPTIONS, type Frequency } from '@/lib/dates';
 import { useDataVersion } from '@/components/DataContext';
 
 export default function BillsPage() {
@@ -20,7 +20,9 @@ export default function BillsPage() {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [nextDueDate, setNextDueDate] = useState('');
-  const [frequency, setFrequency] = useState<'weekly' | 'monthly' | 'yearly'>('monthly');
+  const [frequency, setFrequency] = useState<Frequency>('monthly');
+  const [dayA, setDayA] = useState('15');
+  const [dayB, setDayB] = useState('31');
   const [autoDeduct, setAutoDeduct] = useState(true);
   const [accountId, setAccountId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -59,6 +61,8 @@ export default function BillsPage() {
     setAmount('');
     setNextDueDate('');
     setFrequency('monthly');
+    setDayA('15');
+    setDayB('31');
     setAutoDeduct(true);
     const def = accounts.find((a: any) => a.is_default) || accounts[0];
     setAccountId(def?.account_id || '');
@@ -72,6 +76,9 @@ export default function BillsPage() {
     setAmount(String(bill.expected_amount));
     setNextDueDate(bill.next_due_date || '');
     setFrequency(bill.frequency || 'monthly');
+    const dd = Array.isArray(bill.due_days) ? bill.due_days : [];
+    setDayA(String(dd[0] ?? 15));
+    setDayB(String(dd[1] ?? 31));
     setAutoDeduct(bill.auto_deduct ?? true);
     setAccountId(bill.account_id || (accounts[0]?.account_id || ''));
     setErrorMsg('');
@@ -84,7 +91,19 @@ export default function BillsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const anchorDay = nextDueDate ? parseInt(nextDueDate.split('-')[2], 10) : 1;
+    let anchorDay = nextDueDate ? parseInt(nextDueDate.split('-')[2], 10) : 1;
+    let dueDays: number[] | null = null;
+    if (frequency === 'semimonthly') {
+      const a = parseInt(dayA, 10);
+      const b = parseInt(dayB, 10);
+      const valid = (n: number) => Number.isInteger(n) && n >= 1 && n <= 31;
+      if (!valid(a) || !valid(b) || a === b) {
+        setErrorMsg('Pick two different days between 1 and 31 (31 = last day of the month).');
+        return;
+      }
+      dueDays = [a, b].sort((x, y) => x - y);
+      anchorDay = dueDays[0];
+    }
 
     if (editingBill) {
       const { error } = await supabase
@@ -97,6 +116,7 @@ export default function BillsPage() {
           auto_deduct: autoDeduct,
           account_id: accountId || null,
           due_anchor_day: anchorDay,
+          due_days: dueDays,
         })
         .eq('id', editingBill.id);
 
@@ -115,6 +135,7 @@ export default function BillsPage() {
           auto_deduct: autoDeduct,
           account_id: accountId || null,
           due_anchor_day: anchorDay,
+          due_days: dueDays,
           active: true,
         },
       ]);
@@ -129,21 +150,13 @@ export default function BillsPage() {
     notifyDataChanged();
   };
 
-  const advanceDueDate = (currentDate: string, freq: string, anchor?: number) => {
-    if (freq === 'weekly') return addDays(currentDate, 7);
-    if (freq === 'yearly') {
-      const [y, m, d] = currentDate.split('-');
-      return `${parseInt(y, 10) + 1}-${m}-${d}`;
-    }
-    return addMonthsClamped(currentDate, 1, anchor);
-  };
-
   const handleSkipMonth = async () => {
     if (!editingBill) return;
-    const nextDate = advanceDueDate(
+    const nextDate = advanceDue(
       editingBill.next_due_date,
       editingBill.frequency,
-      editingBill.due_anchor_day
+      editingBill.due_anchor_day,
+      editingBill.due_days
     );
 
     const { error } = await supabase
@@ -225,7 +238,7 @@ export default function BillsPage() {
       }
     }
 
-    const nextDate = advanceDueDate(bill.next_due_date, bill.frequency, bill.due_anchor_day);
+    const nextDate = advanceDue(bill.next_due_date, bill.frequency, bill.due_anchor_day, bill.due_days);
 
     const { error: updateErr } = await supabase
       .from('recurring_bills')
@@ -242,7 +255,22 @@ export default function BillsPage() {
 
   const activeBills = bills.filter((b) => b.active);
   const pausedBills = bills.filter((b) => !b.active);
-  const totalNext30Days = activeBills.reduce((acc, b) => acc + Number(b.expected_amount || 0), 0);
+  // how many times each bill falls due in the next 30 days (twice-a-month bills count twice, yearly ones usually zero)
+  const horizon = addDays(todayLocal(), 30);
+  const countDue = (b: any) => {
+    let d: string = b.next_due_date;
+    if (!d) return 0;
+    let n = 0;
+    for (let i = 0; i < 60 && d <= horizon; i++) {
+      n++;
+      d = advanceDue(d, b.frequency, b.due_anchor_day, b.due_days);
+    }
+    return n;
+  };
+  const totalNext30Days = activeBills.reduce(
+    (acc, b) => acc + Number(b.expected_amount || 0) * countDue(b),
+    0
+  );
 
   return (
     <div className="p-4 space-y-5">
@@ -260,7 +288,7 @@ export default function BillsPage() {
       <div className="bg-[#1f5d4c] text-[#f6f3ea] p-5 rounded-3xl shadow-lg space-y-1">
         <span className="text-[11px] text-[#e2a63f] font-bold uppercase tracking-wider">Next 30 Days Forecast</span>
         <h2 className="font-serif text-3xl font-extrabold">{formatMoney(totalNext30Days)}</h2>
-        <p className="text-xs text-[#f6f3ea]/80">Active recurring bills projected over the coming period.</p>
+        <p className="text-xs text-[#f6f3ea]/80">Active recurring bills projected over the next 30 days.</p>
       </div>
 
       {/* Active Bills List */}
@@ -272,7 +300,7 @@ export default function BillsPage() {
               <div>
                 <p className="font-bold text-sm text-[#143f34]">{b.name}</p>
                 <p className="text-xs text-[#143f34]/60">
-                  {b.next_due_date} · {b.frequency}
+                  {b.next_due_date} · {frequencyLabel(b.frequency, b.due_days)}
                 </p>
               </div>
               <div className="text-right space-y-1">
@@ -394,11 +422,42 @@ export default function BillsPage() {
               onChange={(e: any) => setFrequency(e.target.value)}
               className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
             >
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-              <option value="yearly">Yearly</option>
+              {FREQUENCY_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </div>
+
+          {frequency === 'semimonthly' && (
+            <div>
+              <label className="block text-xs font-bold text-[#143f34] mb-1">Days of the month</label>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={31}
+                  value={dayA}
+                  onChange={(e) => setDayA(e.target.value)}
+                  className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+                />
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={31}
+                  value={dayB}
+                  onChange={(e) => setDayB(e.target.value)}
+                  className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+                />
+              </div>
+              <p className="text-[11px] text-[#143f34]/60 mt-1">
+                e.g. 15 and 31. Use 31 for the last day of the month. Set Next Due Date to the first one you want.
+              </p>
+            </div>
+          )}
 
           <div className="flex items-center justify-between p-3 bg-[#1f5d4c]/10 rounded-2xl">
             <span className="text-xs font-bold text-[#143f34]">Auto-deduct on due date</span>
@@ -421,7 +480,7 @@ export default function BillsPage() {
                 onClick={handleSkipMonth}
                 className="py-2 px-1 bg-[#e2a63f]/15 text-[#143f34] font-bold rounded-xl text-xs min-h-[44px]"
               >
-                Skip Month
+                Skip Next
               </button>
               <button
                 type="button"

@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase/client';
 import { formatMoney } from '@/lib/money';
 import BottomSheet from '@/components/BottomSheet';
 import { useDataVersion } from '@/components/DataContext';
-import { todayLocal } from '@/lib/dates';
+import { todayLocal, frequencyLabel } from '@/lib/dates';
 
 export default function BuddyPage() {
   const { dataVersion, notifyDataChanged } = useDataVersion();
@@ -720,7 +720,7 @@ export default function BuddyPage() {
               <div key={idx} className="flex justify-between items-center border-b border-[#1f5d4c]/10 pb-1.5 last:border-0">
                 <div>
                   <p className="font-bold text-[#143f34]">{b.name}</p>
-                  <span className="text-[10px] text-[#143f34]/60">Due {b.next_due_date} · {b.frequency}</span>
+                  <span className="text-[10px] text-[#143f34]/60">Due {b.next_due_date} · {frequencyLabel(b.frequency)}</span>
                 </div>
                 <div className="text-right">
                   <span className="font-extrabold text-[#c85c46] block">{formatMoney(Number(b.expected_amount))}</span>
