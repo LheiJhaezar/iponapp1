@@ -83,13 +83,13 @@ export default function BottomNav() {
         >
           {hasUnread && <span className="absolute top-1 right-2 w-2.5 h-2.5 bg-coral rounded-full border border-paper" />}
           <span className="text-lg">⚙️</span>
-          <span>More</span>
+          <span>Settings</span>
         </Link>
       </nav>
 
       {isActionsOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-end justify-center pb-24 p-4" onClick={() => setIsActionsOpen(false)}>
-          <div className="bg-paper border border-line rounded-card p-4 w-full max-w-[400px] grid grid-cols-2 gap-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-paper border border-line rounded-card p-4 w-full max-w-[400px] grid grid-cols-3 gap-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <button
               onClick={() => { setIsActionsOpen(false); openSheet('income'); }}
               className="p-3 bg-jade/10 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-jade/20 min-h-[64px] justify-center"
@@ -110,13 +110,6 @@ export default function BottomNav() {
             >
               <span className="text-xl">🔄</span>
               <span>Transfer</span>
-            </button>
-            <button
-              onClick={() => { setIsActionsOpen(false); openSheet('mood'); }}
-              className="p-3 bg-jade/10 rounded-xl flex flex-col items-center gap-1 text-jade font-bold text-xs hover:bg-jade/20 min-h-[64px] justify-center"
-            >
-              <span className="text-xl">😊</span>
-              <span>Log Mood</span>
             </button>
           </div>
         </div>

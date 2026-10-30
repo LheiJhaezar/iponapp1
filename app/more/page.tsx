@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 import BottomSheet from '@/components/BottomSheet';
@@ -8,6 +8,10 @@ import { todayLocal } from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 
 export default function MorePage() {
+  const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [nameMsg, setNameMsg] = useState('');
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isPinOpen, setIsPinOpen] = useState(false);
   const [pin, setPin] = useState('');
@@ -272,9 +276,60 @@ export default function MorePage() {
     setTimeout(() => setIsPinOpen(false), 1200);
   };
 
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      setEmail(user.email || '');
+      const { data } = await supabase.from('profiles').select('display_name, full_name').eq('id', user.id).maybeSingle();
+      setDisplayName(data?.display_name || '');
+      setFullName(data?.full_name || '');
+    })();
+  }, []);
+
+  const saveDisplayName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNameMsg('');
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { error } = await supabase
+      .from('profiles')
+      .update({ display_name: displayName.trim() || null })
+      .eq('id', user.id);
+    if (error) {
+      setNameMsg(error.message);
+      return;
+    }
+    setNameMsg('Saved');
+    window.dispatchEvent(new Event('ipon:profile-updated'));
+    setTimeout(() => setNameMsg(''), 2500);
+  };
+
   return (
     <div className="p-4 space-y-4">
-      <h1 className="font-serif text-2xl font-bold text-[#143f34]">More Features</h1>
+      <h1 className="font-serif text-2xl font-bold text-[#143f34]">Settings</h1>
+
+      <form onSubmit={saveDisplayName} className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-4 rounded-2xl space-y-3">
+        <h3 className="font-bold text-xs text-[#143f34] uppercase tracking-wider">Profile</h3>
+        <div>
+          <label className="block text-xs font-bold text-[#143f34] mb-1">Display name</label>
+          <input
+            type="text"
+            maxLength={40}
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={fullName || 'What should we call you?'}
+            className="w-full bg-white border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+          />
+          <p className="text-[10px] text-[#143f34]/60 mt-1">Shown in the app and to your buddy. {email && `Signed in as ${email}.`}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button type="submit" className="px-4 py-2 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-xs min-h-[44px]">
+            Save name
+          </button>
+          {nameMsg && <span className="text-xs font-bold text-[#1f5d4c]">{nameMsg}</span>}
+        </div>
+      </form>
 
       <div className="space-y-2">
         <Link href="/ledger" className="block bg-[#f6f3ea] border border-[#1f5d4c]/15 p-4 rounded-2xl font-bold text-[#143f34] hover:bg-[#1f5d4c]/5">

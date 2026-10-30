@@ -10,6 +10,7 @@ import UndoToast from '@/components/crud/UndoToast';
 import { todayLocal, addDays, daysBetween } from '@/lib/dates';
 import { useDataVersion } from '@/components/DataContext';
 import { useQuickActions } from '@/components/QuickActionsContext';
+import CutoffPlan from '@/components/CutoffPlan';
 
 interface Banner {
   id: string;
@@ -32,7 +33,7 @@ export default function DashboardPage() {
   const [safeToSpend, setSafeToSpend] = useState<SafeToSpendResult | null>(null);
 
   const [recentLedger, setRecentLedger] = useState<any[]>([]);
-  const [todayMood, setTodayMood] = useState<any>(null);
+  const [keptAssets, setKeptAssets] = useState<any[]>([]);
   const [todayFood, setTodayFood] = useState<any>(null);
   const [banners, setBanners] = useState<Banner[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
@@ -58,7 +59,7 @@ export default function DashboardPage() {
 
     const today = todayLocal();
 
-    const [{ data: cutoffs, error: cErr }, { data: accountList, error: aErr }, { data: moodData, error: mErr }, { data: foodData, error: fErr }, { data: billsData, error: bErr }, { data: snapshotData, error: sErr }] = await Promise.all([
+    const [{ data: cutoffs, error: cErr }, { data: accountList, error: aErr }, { data: foodData, error: fErr }, { data: billsData, error: bErr }, { data: snapshotData, error: sErr }] = await Promise.all([
       supabase
         .from('cutoffs')
         .select('*')
@@ -66,7 +67,6 @@ export default function DashboardPage() {
         .is('deleted_at', null)
         .order('start_date', { ascending: false }),
       supabase.rpc('get_account_balances'),
-      supabase.from('mood_entries').select('*').eq('user_id', user.id).eq('log_date', today).maybeSingle(),
       supabase.from('food_entries').select('*').eq('user_id', user.id).eq('log_date', today).maybeSingle(),
       supabase.from('recurring_bills').select('*').eq('user_id', user.id).eq('active', true).is('deleted_at', null),
       supabase.from('networth_snapshots').select('as_of').eq('user_id', user.id).order('as_of', { ascending: false }).limit(1),
@@ -74,7 +74,6 @@ export default function DashboardPage() {
 
     if (cErr) setErrorMsg(cErr.message);
     if (aErr) setErrorMsg(aErr.message);
-    if (mErr) setErrorMsg(mErr.message);
     if (fErr) setErrorMsg(fErr.message);
     if (bErr) setErrorMsg(bErr.message);
     if (sErr) setErrorMsg(sErr.message);
@@ -82,7 +81,6 @@ export default function DashboardPage() {
     setAllCutoffs(cutoffs || []);
     const currentCut = cutoffs?.[0];
     setActiveCutoff(currentCut);
-    setTodayMood(moodData);
     setTodayFood(foodData);
 
     const { data: summaryData, error: sumErr } = await supabase.rpc('get_money_summary', {
@@ -122,6 +120,17 @@ export default function DashboardPage() {
 
     setRecentLedger(ledgerData || []);
     if (accountList) setAccounts(accountList);
+
+    // assets kept inside an account, so each account can show its real balance
+    const [{ data: hv }, { data: hl }] = await Promise.all([
+      supabase.rpc('get_holding_values'),
+      supabase.from('holdings').select('id, name, kind, held_in_account').eq('user_id', user.id).is('archived_at', null).not('held_in_account', 'is', null),
+    ]);
+    setKeptAssets(
+      (hl || [])
+        .filter((h: any) => h.kind === 'asset')
+        .map((h: any) => ({ ...h, value: Number((hv || []).find((v: any) => v.holding_id === h.id)?.current_value || 0) }))
+    );
 
     // Compute Banners
     evaluateBanners(today, billsData || [], currentCut, snapshotData?.[0]?.as_of);
@@ -234,14 +243,6 @@ export default function DashboardPage() {
     notifyDataChanged();
   };
 
-  const getMoodEmoji = (m: string) => {
-    if (m === 'Happy') return '😊 Happy';
-    if (m === 'Okay') return '😐 Okay';
-    if (m === 'Stressed') return '😫 Stressed';
-    if (m === 'Sad') return '😢 Sad';
-    return '😴 Tired';
-  };
-
   const cutoffTarget = Number(activeCutoff?.target_amount || 0);
   const cutoffProgressPercent = activeCutoff
     ? Math.min(100, Math.round((thisCutoffSavings / (cutoffTarget || 1)) * 100))
@@ -340,22 +341,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Today's Check-in Row */}
-      <div className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-4 rounded-2xl flex items-center justify-between">
-        <div>
-          <span className="text-[10px] font-bold text-[#143f34]/60 uppercase tracking-wider block">Today's Check-in</span>
-          <p className="text-xs font-bold text-[#143f34]">
-            {todayMood ? getMoodEmoji(todayMood.mood) : 'No mood logged today'}
-          </p>
-        </div>
-        <button
-          onClick={() => openSheet('mood')}
-          className="px-3 py-1.5 bg-[#1f5d4c]/10 text-[#1f5d4c] text-xs font-bold rounded-xl hover:bg-[#1f5d4c]/20 min-h-[44px]"
-        >
-          {todayMood ? 'Edit Mood' : 'Log Mood'}
-        </button>
-      </div>
-
       {/* Safe to Spend Card */}
       {safeToSpend && (
         <div className="bg-[#f6f3ea] border border-[#1f5d4c]/20 p-4 rounded-2xl space-y-1">
@@ -366,6 +351,8 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {activeCutoff && !activeCutoff.closed_at && <CutoffPlan cutoff={activeCutoff} available={availableCash} />}
+
       {/* Where My Money Is Strip */}
       <div className="space-y-2">
         <div className="flex justify-between items-center">
@@ -375,12 +362,26 @@ export default function DashboardPage() {
           </Link>
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-          {accounts.map((a) => (
-            <div key={a.account_id} className="min-w-[130px] bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl space-y-1">
-              <span className="text-[10px] uppercase font-bold text-[#143f34]/60">{a.name}</span>
-              <p className="text-sm font-bold text-[#1f5d4c]">{formatMoney(Number(a.balance))}</p>
-            </div>
-          ))}
+          {accounts.map((a) => {
+            const kept = keptAssets.filter((h) => h.held_in_account === a.account_id);
+            const setAside = kept.reduce((s, h) => s + h.value, 0);
+            return (
+              <div key={a.account_id} className="min-w-[140px] bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl space-y-1">
+                <span className="text-[10px] uppercase font-bold text-[#143f34]/60">{a.name}</span>
+                <p className="text-sm font-bold text-[#1f5d4c]">{formatMoney(Number(a.balance) + setAside)}</p>
+                {kept.length > 0 && (
+                  <div className="text-[10px] text-[#143f34]/60 space-y-0.5">
+                    <p>Free {formatMoney(Number(a.balance))}</p>
+                    {kept.map((h) => (
+                      <p key={h.id}>
+                        {h.name} {formatMoney(h.value)}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

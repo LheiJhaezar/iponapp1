@@ -8,17 +8,28 @@ export default function AppHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const [userEmail, setUserEmail] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const isAuthPage = pathname?.startsWith('/login') || pathname?.startsWith('/signup');
 
+  const loadUser = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setUserEmail(user.email || '');
+    const { data } = await supabase.from('profiles').select('display_name').eq('id', user.id).maybeSingle();
+    setDisplayName(data?.display_name || '');
+  };
+
   useEffect(() => {
-    if (!isAuthPage) {
-      supabase.auth.getUser().then(({ data: { user } }) => {
-        if (user) setUserEmail(user.email || '');
-      });
-    }
+    if (!isAuthPage) loadUser();
   }, [pathname]);
+
+  useEffect(() => {
+    const onUpdate = () => loadUser();
+    window.addEventListener('ipon:profile-updated', onUpdate);
+    return () => window.removeEventListener('ipon:profile-updated', onUpdate);
+  }, []);
 
   if (isAuthPage) return null;
 
@@ -28,7 +39,7 @@ export default function AppHeader() {
     router.refresh();
   };
 
-  const initial = userEmail ? userEmail.charAt(0).toUpperCase() : 'U';
+  const initial = (displayName || userEmail).charAt(0).toUpperCase() || 'U';
 
   return (
     <header className="sticky top-0 z-30 bg-paper/90 backdrop-blur-md border-b border-line px-4 h-16 flex items-center justify-between">
@@ -46,7 +57,8 @@ export default function AppHeader() {
           <div className="absolute right-0 mt-2 w-56 bg-paper border border-line rounded-card p-3 shadow-xl space-y-3 z-50">
             <div className="border-b border-line pb-2">
               <p className="text-[10px] uppercase font-bold text-jade/60">Signed in as</p>
-              <p className="text-xs font-bold text-jade truncate">{userEmail}</p>
+              {displayName && <p className="text-sm font-bold text-jade truncate">{displayName}</p>}
+              <p className={`${displayName ? 'text-[11px] text-jade/70' : 'text-xs font-bold text-jade'} truncate`}>{userEmail}</p>
             </div>
             <button
               onClick={handleLogout}

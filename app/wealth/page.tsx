@@ -8,6 +8,9 @@ import { todayLocal, addDays } from '@/lib/dates';
 import { useDataVersion } from '@/components/DataContext';
 import { project, monthlyEquivalent } from '@/lib/projection';
 
+const ASSET_CATEGORIES = ['Savings', 'Investment', 'Emergency Fund', 'Retirement', 'Property', 'Vehicle', 'Other'];
+const DEBT_CATEGORIES = ['Credit Card', 'Loan', 'Installment', 'Other'];
+
 export default function WealthPage() {
   const { dataVersion, notifyDataChanged } = useDataVersion();
   const [netWorth, setNetWorth] = useState<any>({ cash_total: 0, assets_total: 0, liabilities_total: 0, net_worth: 0 });
@@ -44,7 +47,11 @@ export default function WealthPage() {
 
   const [holdKind, setHoldKind] = useState<'asset' | 'liability'>('asset');
   const [holdName, setHoldName] = useState('');
-  const [holdCategory, setHoldCategory] = useState('Emergency Fund');
+  const [holdCategory, setHoldCategory] = useState('Savings');
+  const [holdKeptIn, setHoldKeptIn] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [editKeptIn, setEditKeptIn] = useState('');
   const [holdValue, setHoldValue] = useState('');
   const [holdRate, setHoldRate] = useState('');
   const [linkedBills, setLinkedBills] = useState<any[]>([]);
@@ -212,10 +219,16 @@ export default function WealthPage() {
     }
   };
 
+  // assets kept inside an account count towards that account's real balance
+  const setAsideFor = (accountId: string) =>
+    holdings
+      .filter((h) => h.kind === 'asset' && h.held_in_account === accountId)
+      .reduce((s, h) => s + Number(h.current_value ?? 0), 0);
+
   const openReconcile = (acc: any) => {
     setErrorMsg('');
     setReconcileAccount(acc);
-    setRealBalance(String(acc.balance ?? 0));
+    setRealBalance(String(Number(acc.balance ?? 0) + setAsideFor(acc.account_id)));
     setIsReconcileOpen(true);
   };
 
@@ -230,8 +243,10 @@ export default function WealthPage() {
       return;
     }
 
+    // the real balance in your bank app includes money set aside inside this account
+    const freeTarget = targetVal - setAsideFor(reconcileAccount.account_id);
     const curBal = Number(reconcileAccount.balance || 0);
-    const diff = targetVal - curBal;
+    const diff = freeTarget - curBal;
 
     if (Math.abs(diff) < 0.01) {
       setToastMsg('Already matches');
@@ -242,7 +257,7 @@ export default function WealthPage() {
 
     const { data, error } = await supabase.rpc('reconcile_account', {
       p_account: reconcileAccount.account_id,
-      p_real_balance: targetVal,
+      p_real_balance: freeTarget,
     });
 
     if (error) {
@@ -321,7 +336,7 @@ export default function WealthPage() {
 
     const { data: newHold, error: hErr } = await supabase
       .from('holdings')
-      .insert([{ user_id: user.id, kind: holdKind, name: holdName, category: holdCategory, ...(holdRate !== '' ? { annual_rate: parseFloat(holdRate) } : {}) }])
+      .insert([{ user_id: user.id, kind: holdKind, name: holdName, category: holdCategory, ...(holdRate !== '' ? { annual_rate: parseFloat(holdRate) } : {}), ...(holdKind === 'asset' && holdKeptIn ? { held_in_account: holdKeptIn } : {}) }])
       .select()
       .single();
 
@@ -344,6 +359,8 @@ export default function WealthPage() {
     setHoldName('');
     setHoldValue('');
     setHoldRate('');
+    setHoldKeptIn('');
+    setHoldCategory(holdKind === 'asset' ? 'Savings' : 'Credit Card');
     notifyDataChanged();
   };
 
@@ -351,6 +368,9 @@ export default function WealthPage() {
     setErrorMsg('');
     setSelectedHolding(holding);
     setNewValSnapshot(String(holding.current_value ?? 0));
+    setEditName(holding.name || '');
+    setEditCategory(holding.category || '');
+    setEditKeptIn(holding.held_in_account || '');
     setSnapshotAsOf(todayLocal());
     setIsUpdateHoldingOpen(true);
   };
@@ -378,6 +398,33 @@ export default function WealthPage() {
     } else {
       setIsUpdateHoldingOpen(false);
       setSelectedHolding(null);
+      notifyDataChanged();
+    }
+  };
+
+  const handleSaveHoldingDetails = async () => {
+    if (!selectedHolding) return;
+    setErrorMsg('');
+    if (!editName.trim()) {
+      setErrorMsg('The name can\'t be empty.');
+      return;
+    }
+    const changedKeptIn = editKeptIn !== (selectedHolding.held_in_account || '');
+    const { error } = await supabase
+      .from('holdings')
+      .update({
+        name: editName.trim(),
+        category: editCategory,
+        ...(changedKeptIn ? { held_in_account: editKeptIn || null } : {}),
+      })
+      .eq('id', selectedHolding.id);
+    if (error) {
+      setErrorMsg(error.message);
+    } else {
+      setIsUpdateHoldingOpen(false);
+      setSelectedHolding(null);
+      setToastMsg('Details saved');
+      setTimeout(() => setToastMsg(''), 3000);
       notifyDataChanged();
     }
   };
@@ -481,7 +528,7 @@ export default function WealthPage() {
     : '';
 
   const previewDiff = reconcileAccount
-    ? parseFloat(realBalance || '0') - Number(reconcileAccount.balance || 0)
+    ? parseFloat(realBalance || '0') - setAsideFor(reconcileAccount.account_id) - Number(reconcileAccount.balance || 0)
     : 0;
 
   return (
@@ -603,7 +650,12 @@ export default function WealthPage() {
                 <span className="text-[10px] uppercase font-bold text-[#143f34]/60">{a.kind}</span>
               </div>
               <div className="text-right space-y-1">
-                <p className="font-extrabold text-sm text-[#1f5d4c]">{formatMoney(Number(a.balance))}</p>
+                <p className="font-extrabold text-sm text-[#1f5d4c]">{formatMoney(Number(a.balance) + setAsideFor(a.account_id))}</p>
+                {setAsideFor(a.account_id) > 0 && (
+                  <p className="text-[10px] text-[#143f34]/60">
+                    Free {formatMoney(Number(a.balance))} · set aside {formatMoney(setAsideFor(a.account_id))}
+                  </p>
+                )}
                 <div className="flex justify-end gap-2 text-[10px] font-bold">
                   <button onClick={() => openReconcile(a)} className="text-[#e2a63f] hover:underline min-h-[36px] px-1">
                     Reconcile
@@ -661,7 +713,7 @@ export default function WealthPage() {
               <div key={h.id} className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl flex justify-between items-center">
                 <div>
                   <p className="font-bold text-sm text-[#143f34]">{h.name}</p>
-                  <span className={`text-[10px] uppercase font-bold ${h.kind === 'asset' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>{h.kind} · {h.category}</span>
+                  <span className={`text-[10px] uppercase font-bold ${h.kind === 'asset' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>{h.kind} · {h.category}{h.held_in_account && accounts.find((a) => a.account_id === h.held_in_account) ? ` · in ${accounts.find((a) => a.account_id === h.held_in_account).name}` : ''}</span>
                   {linked > 0 && (
                     <p className="text-[10px] text-[#143f34]/60 mt-0.5">
                       {formatMoney(Number(h.base_value))} entered{h.base_as_of ? ` on ${h.base_as_of}` : ''} {h.kind === 'asset' ? '+' : '−'} {formatMoney(linked)} linked
@@ -696,8 +748,14 @@ export default function WealthPage() {
         <form onSubmit={handleReconcile} className="space-y-4">
           {errorMsg && <p className="text-xs text-[#c85c46] font-bold p-2 bg-[#c85c46]/10 rounded-xl">{errorMsg}</p>}
           <div className="text-xs space-y-1 text-[#143f34]">
-            <p>Current balance in <strong>{reconcileAccount?.name}</strong>: <strong>{formatMoney(Number(reconcileAccount?.balance || 0))}</strong></p>
-            <p className="text-[#143f34]/70">Enter your actual balance. An adjustment entry will be recorded.</p>
+            <p>
+              Balance in <strong>{reconcileAccount?.name}</strong>:{' '}
+              <strong>{formatMoney(Number(reconcileAccount?.balance || 0) + (reconcileAccount ? setAsideFor(reconcileAccount.account_id) : 0))}</strong>
+              {reconcileAccount && setAsideFor(reconcileAccount.account_id) > 0 && (
+                <span className="text-[#143f34]/70"> (free {formatMoney(Number(reconcileAccount.balance || 0))} + set aside {formatMoney(setAsideFor(reconcileAccount.account_id))})</span>
+              )}
+            </p>
+            <p className="text-[#143f34]/70">Enter the balance your bank app shows. An adjustment is recorded only if the free part doesn't match.</p>
           </div>
 
           <div>
@@ -867,7 +925,7 @@ export default function WealthPage() {
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => setHoldKind('asset')}
+              onClick={() => { setHoldKind('asset'); setHoldCategory('Savings'); }}
               className={`py-2 rounded-xl text-xs font-bold border min-h-[44px] ${
                 holdKind === 'asset' ? 'bg-[#1f5d4c] text-[#f6f3ea]' : 'bg-[#f6f3ea] text-[#143f34]'
               }`}
@@ -876,7 +934,7 @@ export default function WealthPage() {
             </button>
             <button
               type="button"
-              onClick={() => setHoldKind('liability')}
+              onClick={() => { setHoldKind('liability'); setHoldCategory('Credit Card'); }}
               className={`py-2 rounded-xl text-xs font-bold border min-h-[44px] ${
                 holdKind === 'liability' ? 'bg-[#c85c46] text-[#f6f3ea]' : 'bg-[#f6f3ea] text-[#c85c46]'
               }`}
@@ -887,11 +945,39 @@ export default function WealthPage() {
           <input
             type="text"
             required
-            placeholder="Name (e.g. Emergency Fund)"
+            placeholder="Name (e.g. MP2)"
             value={holdName}
             onChange={(e) => setHoldName(e.target.value)}
             className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
           />
+          <div>
+            <label className="block text-xs font-bold text-[#143f34] mb-1">Category</label>
+            <select
+              value={holdCategory}
+              onChange={(e) => setHoldCategory(e.target.value)}
+              className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+            >
+              {(holdKind === 'asset' ? ASSET_CATEGORIES : DEBT_CATEGORIES).map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+          {holdKind === 'asset' && accounts.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-[#143f34] mb-1">Kept in (optional)</label>
+              <select
+                value={holdKeptIn}
+                onChange={(e) => setHoldKeptIn(e.target.value)}
+                className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+              >
+                <option value="">Not in one of my accounts</option>
+                {accounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>{a.name}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-[#143f34]/60 mt-1">Pick the account if this money is physically sitting there, like savings inside your bank.</p>
+            </div>
+          )}
           <input
             type="number"
             inputMode="decimal"
@@ -958,6 +1044,52 @@ export default function WealthPage() {
             </button>
           </div>
         </form>
+
+        <div className="mt-5 pt-4 border-t border-[#1f5d4c]/15 space-y-3">
+          <p className="text-xs font-bold text-[#143f34]">Edit details</p>
+          <input
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            placeholder="Name"
+            className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+          />
+          <select
+            value={editCategory}
+            onChange={(e) => setEditCategory(e.target.value)}
+            className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+          >
+            {(() => {
+              const base = selectedHolding?.kind === 'liability' ? DEBT_CATEGORIES : ASSET_CATEGORIES;
+              const list = editCategory && !base.includes(editCategory) ? [editCategory, ...base] : base;
+              return list.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ));
+            })()}
+          </select>
+          {selectedHolding?.kind === 'asset' && accounts.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-[#143f34] mb-1">Kept in</label>
+              <select
+                value={editKeptIn}
+                onChange={(e) => setEditKeptIn(e.target.value)}
+                className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+              >
+                <option value="">Not in one of my accounts</option>
+                {accounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={handleSaveHoldingDetails}
+            className="w-full py-3 bg-[#143f34] text-[#f6f3ea] font-bold rounded-xl text-xs min-h-[44px]"
+          >
+            Save details
+          </button>
+        </div>
       </BottomSheet>
 
       {/* Projection Sheet */}

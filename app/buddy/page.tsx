@@ -123,12 +123,12 @@ export default function BuddyPage() {
     const [{ data: requests }, { data: sent }] = await Promise.all([
       supabase
         .from('buddy_links')
-        .select('*, profiles!requester_id(email)')
+        .select('*, profiles!requester_id(email, display_name)')
         .eq('addressee_id', currentUser.id)
         .eq('status', 'pending'),
       supabase
         .from('buddy_links')
-        .select('*, profiles!addressee_id(email)')
+        .select('*, profiles!addressee_id(email, display_name)')
         .eq('requester_id', currentUser.id)
         .eq('status', 'pending'),
     ]);
@@ -436,7 +436,7 @@ export default function BuddyPage() {
           {pendingRequests.map((req) => (
             <div key={req.id} className="flex items-center justify-between bg-[#f6f3ea] p-3 rounded-xl border border-[#1f5d4c]/10">
               <span className="text-xs font-semibold text-[#143f34]">
-                {req.profiles?.email || 'A user'} wants to link as your savings buddy
+                {req.profiles?.display_name || req.profiles?.email || 'A user'} wants to link as your savings buddy
               </span>
               <div className="flex gap-2">
                 <button
@@ -466,7 +466,7 @@ export default function BuddyPage() {
           {sentInvites.map((inv) => (
             <div key={inv.id} className="flex items-center justify-between bg-[#f6f3ea] p-3 rounded-xl border border-[#1f5d4c]/10">
               <span className="text-xs font-semibold text-[#143f34]">
-                Invite sent to {inv.profiles?.email || 'User'}
+                Invite sent to {inv.profiles?.display_name || inv.profiles?.email || 'User'}
               </span>
               <button
                 onClick={() => handleCancelInvite(inv.id)}
@@ -519,7 +519,7 @@ export default function BuddyPage() {
             {/* Buddy Column */}
             <div className="space-y-3 pl-2">
               <span className="text-xs font-bold text-[#e2a63f] block truncate">
-                {buddyProfile?.email?.split('@')[0] || 'Buddy'}
+                {buddyProfile?.display_name || buddyProfile?.email?.split('@')[0] || 'Buddy'}
               </span>
 
               <div>
