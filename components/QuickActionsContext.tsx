@@ -29,6 +29,8 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
   const [note, setNote] = useState('');
   const [category, setCategory] = useState('savings');
   const [accountId, setAccountId] = useState('');
+  const [holdingList, setHoldingList] = useState<any[]>([]);
+  const [holdingId, setHoldingId] = useState('');
   const [fromAccount, setFromAccount] = useState('');
   const [toAccount, setToAccount] = useState('');
   const [entryDate, setEntryDate] = useState(todayLocal());
@@ -42,7 +44,17 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     fetchAccounts();
+    fetchHoldings();
   }, [dataVersion]);
+
+  const fetchHoldings = async () => {
+    const { data } = await supabase
+      .from('holdings')
+      .select('id, name, kind')
+      .is('archived_at', null)
+      .order('name', { ascending: true });
+    if (data) setHoldingList(data);
+  };
 
   const fetchAccounts = async () => {
     const { data } = await supabase.rpc('get_account_balances');
@@ -59,6 +71,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     setErrorMsg('');
     setAmount('');
     setNote('');
+    setHoldingId('');
     setMoodNote('');
     const targetDate = initialDate || todayLocal();
     setEntryDate(targetDate);
@@ -120,6 +133,10 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
     }
   };
 
+  // Savings can go into an asset (deposit); Bills can pay down a debt
+  const linkKind = category === 'savings' ? 'asset' : category === 'bills' ? 'liability' : null;
+  const linkChoices = linkKind ? holdingList.filter((h) => h.kind === linkKind) : [];
+
   const handleAllocate = async (e: React.FormEvent) => {
     e.preventDefault();
     const { data: { user } } = await supabase.auth.getUser();
@@ -133,6 +150,7 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
         amount: parseFloat(amount),
         note: note || category,
         entry_date: entryDate,
+        holding_id: linkKind && holdingId ? holdingId : null,
       },
     ]);
 
@@ -302,7 +320,10 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
           </div>
           <select
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
+            onChange={(e) => {
+              setCategory(e.target.value);
+              setHoldingId('');
+            }}
             className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
           >
             <option value="savings">Savings Target</option>
@@ -310,6 +331,25 @@ export function QuickActionsProvider({ children }: { children: React.ReactNode }
             <option value="groceries">Groceries</option>
             <option value="other">Other Expense</option>
           </select>
+          {linkChoices.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-[#143f34] mb-1">
+                {linkKind === 'asset' ? 'Goes to (optional)' : 'Pays down (optional)'}
+              </label>
+              <select
+                value={holdingId}
+                onChange={(e) => setHoldingId(e.target.value)}
+                className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+              >
+                <option value="">None</option>
+                {linkChoices.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <input
             type="number"
             inputMode="decimal"

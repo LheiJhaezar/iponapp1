@@ -6,6 +6,7 @@ import { formatMoney } from '@/lib/money';
 import BottomSheet from '@/components/BottomSheet';
 import { todayLocal, addDays } from '@/lib/dates';
 import { useDataVersion } from '@/components/DataContext';
+import { project, monthlyEquivalent } from '@/lib/projection';
 
 export default function WealthPage() {
   const { dataVersion, notifyDataChanged } = useDataVersion();
@@ -45,6 +46,17 @@ export default function WealthPage() {
   const [holdName, setHoldName] = useState('');
   const [holdCategory, setHoldCategory] = useState('Emergency Fund');
   const [holdValue, setHoldValue] = useState('');
+  const [holdRate, setHoldRate] = useState('');
+  const [linkedBills, setLinkedBills] = useState<any[]>([]);
+
+  // Projection sheet
+  const [isProjOpen, setIsProjOpen] = useState(false);
+  const [projHolding, setProjHolding] = useState<any>(null);
+  const [projRate, setProjRate] = useState('');
+  const [projMonthly, setProjMonthly] = useState('');
+  const [projYears, setProjYears] = useState('5');
+  const [projCompounding, setProjCompounding] = useState<'yearly' | 'monthly'>('yearly');
+  const [projOverrides, setProjOverrides] = useState<Record<string, string>>({});
 
   const [selectedHolding, setSelectedHolding] = useState<any>(null);
   const [newValSnapshot, setNewValSnapshot] = useState('');
@@ -65,12 +77,14 @@ export default function WealthPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const [{ data: net, error: netErr }, { data: accs, error: accErr }, { data: holds, error: holdErr }, { data: archAccs, error: archErr }, { data: snaps, error: snapErr }] = await Promise.all([
+    const [{ data: net, error: netErr }, { data: accs, error: accErr }, { data: holds, error: holdErr }, { data: archAccs, error: archErr }, { data: snaps, error: snapErr }, { data: hvals }, { data: lbills }] = await Promise.all([
       supabase.rpc('get_net_worth'),
       supabase.rpc('get_account_balances'),
       supabase.from('holdings').select('*, holding_values(*)').eq('user_id', user.id).is('archived_at', null),
       supabase.from('accounts').select('*').eq('user_id', user.id).not('archived_at', 'is', null).order('created_at', { ascending: true }),
       supabase.from('networth_snapshots').select('as_of, net_worth').eq('user_id', user.id).order('as_of', { ascending: true }),
+      supabase.rpc('get_holding_values'),
+      supabase.from('recurring_bills').select('holding_id, expected_amount, frequency').eq('user_id', user.id).eq('active', true).is('deleted_at', null).not('holding_id', 'is', null),
     ]);
 
     if (netErr) setErrorMsg(netErr.message);
@@ -86,7 +100,18 @@ export default function WealthPage() {
         setMoveToAccId(accs[0].account_id);
       }
     }
-    if (holds) setHoldings(holds);
+    if (holds) {
+      // live value = last value you entered + linked deposits/payments since (falls back to the last entered value)
+      setHoldings(
+        holds.map((h: any) => {
+          const live = (hvals || []).find((v: any) => v.holding_id === h.id);
+          if (live) return { ...h, ...live };
+          const last = [...(h.holding_values || [])].sort((a: any, b: any) => (a.as_of < b.as_of ? 1 : -1))[0];
+          return { ...h, base_value: last?.value || 0, base_as_of: last?.as_of || null, linked_since: 0, current_value: last?.value || 0 };
+        })
+      );
+    }
+    setLinkedBills(lbills || []);
     if (archAccs) setArchivedAccounts(archAccs);
     if (snaps) setSnapshots(snaps);
   };
@@ -296,7 +321,7 @@ export default function WealthPage() {
 
     const { data: newHold, error: hErr } = await supabase
       .from('holdings')
-      .insert([{ user_id: user.id, kind: holdKind, name: holdName, category: holdCategory }])
+      .insert([{ user_id: user.id, kind: holdKind, name: holdName, category: holdCategory, ...(holdRate !== '' ? { annual_rate: parseFloat(holdRate) } : {}) }])
       .select()
       .single();
 
@@ -318,14 +343,14 @@ export default function WealthPage() {
     setIsAddHoldingOpen(false);
     setHoldName('');
     setHoldValue('');
+    setHoldRate('');
     notifyDataChanged();
   };
 
   const openUpdateHolding = (holding: any) => {
     setErrorMsg('');
     setSelectedHolding(holding);
-    const latest = holding.holding_values?.[0]?.value || 0;
-    setNewValSnapshot(String(latest));
+    setNewValSnapshot(String(holding.current_value ?? 0));
     setSnapshotAsOf(todayLocal());
     setIsUpdateHoldingOpen(true);
   };
@@ -371,6 +396,53 @@ export default function WealthPage() {
     } else {
       setIsUpdateHoldingOpen(false);
       setSelectedHolding(null);
+      notifyDataChanged();
+    }
+  };
+
+  const openProjection = (h: any) => {
+    setErrorMsg('');
+    setProjHolding(h);
+    setProjRate(h.annual_rate != null ? String(h.annual_rate) : '');
+    setProjMonthly(h.monthly_amount != null ? String(h.monthly_amount) : '');
+    setProjYears('5');
+    setProjCompounding(h.compounding === 'monthly' ? 'monthly' : 'yearly');
+    const ov: Record<string, string> = {};
+    Object.entries(h.rate_overrides || {}).forEach(([k, v]) => (ov[k] = String(v)));
+    setProjOverrides(ov);
+    setIsProjOpen(true);
+  };
+
+  const billMonthlyFor = (holdingId: string) =>
+    linkedBills
+      .filter((b) => b.holding_id === holdingId)
+      .reduce((acc, b) => acc + monthlyEquivalent(Number(b.expected_amount || 0), b.frequency), 0);
+
+  const projOverrideNumbers = () => {
+    const out: Record<string, number> = {};
+    (Object.entries(projOverrides) as [string, string][]).forEach(([k, v]) => {
+      if (v.trim() !== '' && Number.isFinite(parseFloat(v))) out[k] = parseFloat(v);
+    });
+    return out;
+  };
+
+  const handleSaveProjectionSettings = async () => {
+    if (!projHolding) return;
+    setErrorMsg('');
+    const { error } = await supabase
+      .from('holdings')
+      .update({
+        annual_rate: projRate.trim() === '' ? null : parseFloat(projRate),
+        monthly_amount: projMonthly.trim() === '' ? null : parseFloat(projMonthly),
+        compounding: projCompounding,
+        rate_overrides: projOverrideNumbers(),
+      })
+      .eq('id', projHolding.id);
+    if (error) {
+      setErrorMsg(error.message);
+    } else {
+      setToastMsg('Projection settings saved');
+      setTimeout(() => setToastMsg(''), 3000);
       notifyDataChanged();
     }
   };
@@ -583,21 +655,35 @@ export default function WealthPage() {
 
         <div className="space-y-2">
           {holdings.map((h) => {
-            const latest = h.holding_values?.[0]?.value || 0;
+            const current = Number(h.current_value ?? 0);
+            const linked = Number(h.linked_since ?? 0);
             return (
               <div key={h.id} className="bg-[#f6f3ea] border border-[#1f5d4c]/15 p-3 rounded-2xl flex justify-between items-center">
                 <div>
                   <p className="font-bold text-sm text-[#143f34]">{h.name}</p>
                   <span className={`text-[10px] uppercase font-bold ${h.kind === 'asset' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>{h.kind} · {h.category}</span>
+                  {linked > 0 && (
+                    <p className="text-[10px] text-[#143f34]/60 mt-0.5">
+                      {formatMoney(Number(h.base_value))} entered{h.base_as_of ? ` on ${h.base_as_of}` : ''} {h.kind === 'asset' ? '+' : '−'} {formatMoney(linked)} linked
+                    </p>
+                  )}
                 </div>
                 <div className="text-right space-y-1">
-                  <p className={`font-extrabold text-sm ${h.kind === 'asset' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>{formatMoney(Number(latest))}</p>
-                  <button
-                    onClick={() => openUpdateHolding(h)}
-                    className="text-[10px] font-bold text-[#1f5d4c] hover:underline min-h-[36px]"
-                  >
-                    ✏️ Update Value
-                  </button>
+                  <p className={`font-extrabold text-sm ${h.kind === 'asset' ? 'text-[#1f5d4c]' : 'text-[#c85c46]'}`}>{formatMoney(current)}</p>
+                  <div className="flex gap-3 justify-end">
+                    <button
+                      onClick={() => openProjection(h)}
+                      className="text-[10px] font-bold text-[#1f5d4c] hover:underline min-h-[36px]"
+                    >
+                      📈 Projection
+                    </button>
+                    <button
+                      onClick={() => openUpdateHolding(h)}
+                      className="text-[10px] font-bold text-[#1f5d4c] hover:underline min-h-[36px]"
+                    >
+                      ✏️ Update Value
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -815,6 +901,15 @@ export default function WealthPage() {
             onChange={(e) => setHoldValue(e.target.value)}
             className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
           />
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            placeholder={holdKind === 'asset' ? 'Yearly earnings rate % (optional)' : 'Yearly interest rate % (optional)'}
+            value={holdRate}
+            onChange={(e) => setHoldRate(e.target.value)}
+            className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+          />
           <button type="submit" className="w-full py-3 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-sm min-h-[44px]">
             Save Holding
           </button>
@@ -837,6 +932,7 @@ export default function WealthPage() {
             />
           </div>
 
+          <p className="text-[11px] text-[#143f34]/60">Enter the real balance from your statement. Linked deposits or payments up to this date count as already included.</p>
           <div>
             <label className="block text-xs font-bold text-[#143f34] mb-1">New Value (₱)</label>
             <input
@@ -862,6 +958,170 @@ export default function WealthPage() {
             </button>
           </div>
         </form>
+      </BottomSheet>
+
+      {/* Projection Sheet */}
+      <BottomSheet isOpen={isProjOpen} onClose={() => setIsProjOpen(false)} title={`${projHolding?.name || ''} projection`}>
+        {projHolding && (() => {
+          const isAsset = projHolding.kind === 'asset';
+          const billMonthly = billMonthlyFor(projHolding.id);
+          const monthlyNum = projMonthly.trim() !== '' ? parseFloat(projMonthly) : billMonthly;
+          const years = parseInt(projYears, 10) || 5;
+          const proj = project({
+            kind: projHolding.kind,
+            start: Number(projHolding.current_value ?? 0),
+            monthly: Number.isFinite(monthlyNum) ? monthlyNum : 0,
+            rate: parseFloat(projRate) || 0,
+            overrides: projOverrideNumbers(),
+            years,
+            compounding: projCompounding,
+          });
+          const maxEnd = Math.max(...proj.rows.map((r) => r.end), 1);
+          const inputCls = 'w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]';
+          const lbl = 'block text-xs font-bold text-[#143f34] mb-1';
+          return (
+            <div className="space-y-4">
+              {errorMsg && <p className="text-xs text-[#c85c46] font-bold p-2 bg-[#c85c46]/10 rounded-xl">{errorMsg}</p>}
+
+              <p className="text-xs text-[#143f34]/70">
+                Starting from <b>{formatMoney(Number(projHolding.current_value ?? 0))}</b> today. Change anything to try a what-if, then Save to keep it.
+              </p>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={lbl}>{isAsset ? 'Earnings rate (% / year)' : 'Interest rate (% / year)'}</label>
+                  <input type="number" inputMode="decimal" step="0.01" value={projRate} onChange={(e) => setProjRate(e.target.value)} className={inputCls} />
+                </div>
+                <div>
+                  <label className={lbl}>{isAsset ? 'Deposit / month (₱)' : 'Payment / month (₱)'}</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder={billMonthly > 0 ? String(Math.round(billMonthly * 100) / 100) : '0'}
+                    value={projMonthly}
+                    onChange={(e) => setProjMonthly(e.target.value)}
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={lbl}>Years</label>
+                  <select value={projYears} onChange={(e) => setProjYears(e.target.value)} className={inputCls}>
+                    {[1, 2, 3, 5, 10, 15, 20, 30].map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </div>
+                {isAsset && (
+                  <div>
+                    <label className={lbl}>Earnings added</label>
+                    <select value={projCompounding} onChange={(e) => setProjCompounding(e.target.value as 'yearly' | 'monthly')} className={inputCls}>
+                      <option value="yearly">Once a year</option>
+                      <option value="monthly">Every month</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+              {billMonthly > 0 && (
+                <p className="text-[11px] text-[#143f34]/60">
+                  Linked bills add up to {formatMoney(billMonthly)} a month. Leave the amount blank to use that.
+                </p>
+              )}
+
+              <details className="bg-[#f6f3ea] border border-[#1f5d4c]/15 rounded-xl p-3">
+                <summary className="text-xs font-bold text-[#143f34] cursor-pointer">A different rate for some years (optional)</summary>
+                <div className="grid grid-cols-3 gap-2 mt-3">
+                  {Array.from({ length: Math.min(years, 12) }, (_, i) => String(i + 1)).map((y) => (
+                    <div key={y}>
+                      <label className="block text-[10px] font-bold text-[#143f34] mb-1">Year {y} (%)</label>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.01"
+                        placeholder={projRate || '0'}
+                        value={projOverrides[y] ?? ''}
+                        onChange={(e) => setProjOverrides({ ...projOverrides, [y]: e.target.value })}
+                        className="w-full bg-white border border-[#1f5d4c]/20 rounded-lg p-2 text-sm text-[#143f34]"
+                      />
+                    </div>
+                  ))}
+                </div>
+                {years > 12 && <p className="text-[10px] text-[#143f34]/60 mt-2">Later years use the main rate.</p>}
+              </details>
+
+              <div className="bg-[#1f5d4c]/10 rounded-2xl p-3 space-y-1">
+                {isAsset ? (
+                  <>
+                    <p className="text-sm font-extrabold text-[#1f5d4c]">In {years} {years === 1 ? 'year' : 'years'}: {formatMoney(proj.end)}</p>
+                    <p className="text-[11px] text-[#143f34]">
+                      You add {formatMoney(proj.totalFlow)} and it earns about {formatMoney(proj.totalEarned)}.
+                    </p>
+                  </>
+                ) : Number(projHolding.current_value ?? 0) <= 0 ? (
+                  <p className="text-sm font-extrabold text-[#1f5d4c]">Nothing owed right now.</p>
+                ) : proj.neverPaidOff ? (
+                  <p className="text-sm font-extrabold text-[#c85c46]">At this payment the debt never gets paid off, because the monthly interest is as big as the payment.</p>
+                ) : (
+                  <>
+                    <p className="text-sm font-extrabold text-[#1f5d4c]">
+                      Paid off in {proj.payoffMonths} {proj.payoffMonths === 1 ? 'month' : 'months'}
+                      {proj.payoffMonths! >= 12 ? ` (${Math.floor(proj.payoffMonths! / 12)} yr ${proj.payoffMonths! % 12} mo)` : ''}
+                    </p>
+                    <p className="text-[11px] text-[#143f34]">Total interest paid: about {formatMoney(proj.payoffInterest || 0)}.</p>
+                  </>
+                )}
+                <p className="text-[10px] text-[#143f34]/60">An estimate. Real rates change, and deposits are assumed at the start of each month.</p>
+              </div>
+
+              <svg viewBox="0 0 300 90" className="w-full h-24">
+                {proj.rows.map((r, i) => {
+                  const bw = 300 / proj.rows.length;
+                  const bh = (r.end / maxEnd) * 70;
+                  return (
+                    <g key={r.year}>
+                      <rect x={i * bw + bw * 0.15} y={80 - bh} width={bw * 0.7} height={bh} rx="3" fill={isAsset ? '#1f5d4c' : '#c85c46'} opacity="0.85" />
+                      {(proj.rows.length <= 12 || r.year % 5 === 0) && (
+                        <text x={i * bw + bw / 2} y="89" textAnchor="middle" fontSize="7" fill="#143f34">{r.year}</text>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px] text-[#143f34]">
+                  <thead>
+                    <tr className="text-left text-[#143f34]/60">
+                      <th className="py-1 pr-2">Year</th>
+                      <th className="py-1 pr-2">Rate</th>
+                      <th className="py-1 pr-2 text-right">{isAsset ? 'Added' : 'Paid'}</th>
+                      <th className="py-1 pr-2 text-right">{isAsset ? 'Earned' : 'Interest'}</th>
+                      <th className="py-1 text-right">{isAsset ? 'Balance' : 'Owed'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proj.rows.map((r) => (
+                      <tr key={r.year} className="border-t border-[#1f5d4c]/10">
+                        <td className="py-1 pr-2 font-bold">{r.year}</td>
+                        <td className="py-1 pr-2">{r.rate}%</td>
+                        <td className="py-1 pr-2 text-right">{formatMoney(r.flow)}</td>
+                        <td className="py-1 pr-2 text-right">{formatMoney(r.earned)}</td>
+                        <td className="py-1 text-right font-bold">{formatMoney(r.end)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveProjectionSettings}
+                className="w-full py-3 bg-[#1f5d4c] text-[#f6f3ea] font-bold rounded-xl text-sm min-h-[44px]"
+              >
+                Save these settings
+              </button>
+            </div>
+          );
+        })()}
       </BottomSheet>
     </div>
   );

@@ -25,6 +25,8 @@ export default function BillsPage() {
   const [dayB, setDayB] = useState('31');
   const [autoDeduct, setAutoDeduct] = useState(true);
   const [accountId, setAccountId] = useState('');
+  const [holdings, setHoldings] = useState<any[]>([]);
+  const [holdingId, setHoldingId] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export default function BillsPage() {
 
     await supabase.rpc('process_my_due_bills');
 
-    const [{ data: billsData }, { data: accsData }] = await Promise.all([
+    const [{ data: billsData }, { data: accsData }, { data: holdData }] = await Promise.all([
       supabase
         .from('recurring_bills')
         .select('*')
@@ -45,8 +47,10 @@ export default function BillsPage() {
         .is('deleted_at', null)
         .order('next_due_date', { ascending: true }),
       supabase.rpc('get_account_balances'),
+      supabase.from('holdings').select('id, name, kind').eq('user_id', user.id).is('archived_at', null).order('name', { ascending: true }),
     ]);
 
+    if (holdData) setHoldings(holdData);
     if (billsData) setBills(billsData);
     if (accsData) {
       setAccounts(accsData);
@@ -64,6 +68,7 @@ export default function BillsPage() {
     setDayA('15');
     setDayB('31');
     setAutoDeduct(true);
+    setHoldingId('');
     const def = accounts.find((a: any) => a.is_default) || accounts[0];
     setAccountId(def?.account_id || '');
     setErrorMsg('');
@@ -80,6 +85,7 @@ export default function BillsPage() {
     setDayA(String(dd[0] ?? 15));
     setDayB(String(dd[1] ?? 31));
     setAutoDeduct(bill.auto_deduct ?? true);
+    setHoldingId(bill.holding_id || '');
     setAccountId(bill.account_id || (accounts[0]?.account_id || ''));
     setErrorMsg('');
     setIsSheetOpen(true);
@@ -115,6 +121,7 @@ export default function BillsPage() {
           frequency,
           auto_deduct: autoDeduct,
           account_id: accountId || null,
+          holding_id: holdingId || null,
           due_anchor_day: anchorDay,
           due_days: dueDays,
         })
@@ -134,6 +141,7 @@ export default function BillsPage() {
           frequency,
           auto_deduct: autoDeduct,
           account_id: accountId || null,
+          holding_id: holdingId || null,
           due_anchor_day: anchorDay,
           due_days: dueDays,
           active: true,
@@ -219,12 +227,19 @@ export default function BillsPage() {
       .limit(1)
       .maybeSingle();
 
-    if (cutoff) {
+    if (!cutoff) {
+      alert('Create a cutoff first (Dashboard), so this payment has somewhere to be recorded.');
+      return;
+    }
+
+    {
+      const linked = holdings.find((h) => h.id === bill.holding_id);
       const { error: insertErr } = await supabase.from('allocations').insert([
         {
           user_id: user.id,
           cutoff_id: cutoff.id,
-          category: 'bills',
+          category: linked?.kind === 'asset' ? 'savings' : 'bills',
+          holding_id: linked ? linked.id : null,
           amount: bill.expected_amount,
           note: `${bill.name} (manual)`,
           bill_id: bill.id,
@@ -403,6 +418,33 @@ export default function BillsPage() {
               ))}
             </select>
           </div>
+
+          {holdings.length > 0 && (
+            <div>
+              <label className="block text-xs font-bold text-[#143f34] mb-1">Goes to / Pays down (optional)</label>
+              <select
+                value={holdingId}
+                onChange={(e) => setHoldingId(e.target.value)}
+                className="w-full bg-[#f6f3ea] border border-[#1f5d4c]/20 rounded-xl p-3 text-base text-[#143f34]"
+              >
+                <option value="">None</option>
+                {holdings.some((h) => h.kind === 'asset') && (
+                  <optgroup label="Assets (counts as Savings)">
+                    {holdings.filter((h) => h.kind === 'asset').map((h) => (
+                      <option key={h.id} value={h.id}>{h.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {holdings.some((h) => h.kind === 'liability') && (
+                  <optgroup label="Debts (pays down the balance)">
+                    {holdings.filter((h) => h.kind === 'liability').map((h) => (
+                      <option key={h.id} value={h.id}>{h.name}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-[#143f34] mb-1">Next Due Date</label>
